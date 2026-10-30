@@ -269,12 +269,12 @@ GraphicsPipeline::GraphicsPipeline(
     GuestDescriptorQueue& guest_descriptor_queue_, DescriptorBufferRing& descriptor_buffer_ring_,
     Common::ThreadWorker* worker_thread,
     PipelineStatistics* pipeline_statistics, RenderPassCache& render_pass_cache,
-    const GraphicsPipelineCacheKey& key_, std::array<vk::ShaderModule, NUM_STAGES> stages,
+    const GraphicsPipelineCacheKey& key_, std::shared_ptr<const GraphicsShaderModules> modules,
     const std::array<const Shader::Info*, NUM_STAGES>& infos)
     : key{key_}, device{device_}, texture_cache{texture_cache_}, buffer_cache{buffer_cache_},
       pipeline_cache(pipeline_cache_), scheduler{scheduler_},
       guest_descriptor_queue{guest_descriptor_queue_},
-      descriptor_buffer_ring{descriptor_buffer_ring_}, spv_modules{std::move(stages)} {
+      descriptor_buffer_ring{descriptor_buffer_ring_}, spv_modules{std::move(modules)} {
     if (shader_notify) {
         shader_notify->MarkShaderBuilding();
     }
@@ -344,9 +344,8 @@ GraphicsPipeline::GraphicsPipeline(
         }
         // Nothing reads the shader modules once the pipeline exists, and the driver keeps a copy
         // of each one's SPIR-V while it lives (title 1: ~1,500 pipelines, 2-5 modules each).
-        for (vk::ShaderModule& module : spv_modules) {
-            module.reset();
-        }
+        // They are freed once no other pipeline still to be built shares them.
+        spv_modules.reset();
 
         std::scoped_lock lock{build_mutex};
         is_built = true;
@@ -356,7 +355,7 @@ GraphicsPipeline::GraphicsPipeline(
         }
     }};
     // Before the build: it frees the modules this looks at.
-    configure_func = ConfigureFunc(spv_modules, stage_infos);
+    configure_func = ConfigureFunc(*spv_modules, stage_infos);
     if (worker_thread) {
         worker_thread->QueueWork(std::move(func));
     } else {
@@ -823,7 +822,7 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
     if (!vertex_binding_divisors.empty()) {
         vertex_input_ci.pNext = &input_divisor_ci;
     }
-    const bool has_tess_stages = spv_modules[1] || spv_modules[2];
+    const bool has_tess_stages = (*spv_modules)[1] || (*spv_modules)[2];
     auto input_assembly_topology = MaxwellToVK::PrimitiveTopology(device, key.state.topology);
     if (input_assembly_topology == VK_PRIMITIVE_TOPOLOGY_PATCH_LIST) {
         if (!has_tess_stages) {
@@ -1145,7 +1144,7 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
     };
     static_vector<VkPipelineShaderStageCreateInfo, 5> shader_stages;
     for (size_t stage = 0; stage < Maxwell::MaxShaderStage; ++stage) {
-        if (!spv_modules[stage]) {
+        if (!(*spv_modules)[stage]) {
             continue;
         }
         [[maybe_unused]] auto& stage_ci =
@@ -1155,7 +1154,7 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
                 .flags = 0,
                 .stage = StageFlag(stage_infos[stage],
                                    MaxwellToVK::ShaderStage(Shader::StageFromIndex(stage))),
-                .module = *spv_modules[stage],
+                .module = *(*spv_modules)[stage],
                 .pName = "main",
                 .pSpecializationInfo = nullptr,
             });
