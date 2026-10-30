@@ -34,6 +34,7 @@
 #include "shader_recompiler/frontend/ampere/program_address_map.h"
 #include "video_core/engines/kepler_compute.h"
 #include "video_core/memory_manager.h"
+#include "video_core/renderer_vulkan/pipeline_stats.h"
 #include "video_core/shader_environment.h"
 #include "video_core/texture_cache/format_lookup_table.h"
 #include "video_core/textures/texture.h"
@@ -407,6 +408,11 @@ private:
 void GenericEnvironment::InitializeNativeCode(std::shared_ptr<const LoweredNativeCode> lowered,
                                               u32 source_header_size, bool geometry) {
     if (!lowered) {
+        // Compute environments set their stage before this; graphics ones after.
+        const Vulkan::PipelineStats::ScopedTimer timer{
+            stage == Shader::Stage::Compute ? Vulkan::PipelineStats::Kind::Compute
+                                            : Vulkan::PipelineStats::Kind::Graphics,
+            Vulkan::PipelineStats::Stage::Lower};
         lowered = LowerNativeCode(source_header_size, geometry);
     }
     if (lowered->texture_bound != ~0U) {
