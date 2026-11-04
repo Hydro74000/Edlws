@@ -1103,8 +1103,23 @@ void ReportNewPipelineKey(const GraphicsPipelineCacheKey& key) {
         diffs += " driver";
     }
     const size_t size = now.Size();
-    if (diffs.empty() && size > offsetof(FixedPipelineState, attachments)) {
-        diffs = fmt::format(" past attachments (key size {})", size);
+    const auto differs = [&](size_t begin, size_t end) {
+        end = (std::min)(end, size);
+        return begin < end && std::memcmp(reinterpret_cast<const char*>(&now) + begin,
+                                          reinterpret_cast<const char*>(&before) + begin,
+                                          end - begin) != 0;
+    };
+    if (differs(offsetof(FixedPipelineState, attachments), offsetof(FixedPipelineState, attributes))) {
+        diffs += " blending";
+    }
+    if (differs(offsetof(FixedPipelineState, attributes), offsetof(FixedPipelineState, binding_divisors))) {
+        diffs += " vertex_attributes";
+    }
+    if (differs(offsetof(FixedPipelineState, binding_divisors), offsetof(FixedPipelineState, vertex_strides))) {
+        diffs += " binding_divisors";
+    }
+    if (differs(offsetof(FixedPipelineState, vertex_strides), size)) {
+        diffs += " vertex_strides_or_later";
     }
     it->second = key;
     if (logged++ < 400) {
