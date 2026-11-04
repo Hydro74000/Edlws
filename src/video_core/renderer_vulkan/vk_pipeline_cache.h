@@ -111,6 +111,19 @@ struct ShaderPools {
     Shader::ObjectPool<Shader::Maxwell::Flow::Block> flow_block{32};
 };
 
+/// Why CurrentGraphicsPipeline() returned no pipeline (the draw is skipped).
+enum class DrawSkip : u8 {
+    None,
+    ProgramUnavailable, ///< A stage's program was not captured or lowered (rejected)
+    Translating,        ///< Translation queued on a worker, not ready yet
+    Compiling,          ///< Driver compile not done (asynchronous shaders)
+    Failed,             ///< Translation or pipeline creation failed
+    NoGeometryShaders,  ///< Native geometry program, device without geometry shaders
+    NoMeshShaders,      ///< Task/mesh program, device without VK_EXT_mesh_shader
+    KnownIssue,         ///< Program with a pattern this driver mishandles
+    Count,
+};
+
 class PipelineCache : public VideoCommon::ShaderCache {
 public:
     explicit PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_, const Device& device,
@@ -122,6 +135,11 @@ public:
     ~PipelineCache();
 
     [[nodiscard]] GraphicsPipeline* CurrentGraphicsPipeline();
+
+    /// Why the last CurrentGraphicsPipeline() returned null.
+    [[nodiscard]] DrawSkip LastDrawSkip() const noexcept {
+        return last_skip;
+    }
     [[nodiscard]] bool IsIndirectResetShader() const;
 
     void TickFrame();
@@ -159,6 +177,7 @@ private:
         std::unique_ptr<GraphicsPipeline> pipeline; ///< Null when the build failed.
         GraphicsEnvironmentArray envs;              ///< For the disk cache.
         std::chrono::steady_clock::duration build_time{};
+        DrawSkip failure{}; ///< Why the build failed, when it did.
     };
 
     [[nodiscard]] bool CanTranslateAsynchronously() const;
@@ -281,6 +300,10 @@ private:
 
     Common::ThreadWorker workers;
     Common::ThreadWorker serialization_thread;
+
+    mutable DrawSkip last_skip{};
+    /// Why the null pipelines in graphics_cache failed (GPU thread only).
+    std::unordered_map<GraphicsPipelineCacheKey, DrawSkip> failure_reasons;
     DynamicFeatures dynamic_features;
 
     /// Keys whose pipeline is being translated on a worker (GPU thread only).

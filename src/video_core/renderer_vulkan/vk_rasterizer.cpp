@@ -363,8 +363,10 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {
     }()};
     if (!pipeline) {
         report_failure("no pipeline");
+        CountDraw(true);
         return;
     }
+    CountDraw(false);
     if (!is_indexed && TryNx2IndirectReset()) {
         submitted = true;
         return;
@@ -1025,6 +1027,7 @@ void RasterizerVulkan::DispatchCompute() {
 
     ComputePipeline* const pipeline{pipeline_cache.CurrentComputePipeline()};
     if (!pipeline) {
+        ++draw_skip_stats.dispatches_skipped;
         if (kepler_compute->IsNativeMode()) throw Shader::RuntimeError("Native compute pipeline unavailable");
         return;
     }
@@ -1329,6 +1332,34 @@ void RasterizerVulkan::SignalSyncPoint(u32 value) {
 
 void RasterizerVulkan::SignalReference() {
     fence_manager.SignalReference();
+}
+
+void RasterizerVulkan::CountDraw(bool skipped) {
+    auto& stats = draw_skip_stats;
+    ++stats.draws;
+    if (skipped) {
+        ++stats.skipped[static_cast<size_t>(pipeline_cache.LastDrawSkip())];
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (now - stats.window < std::chrono::seconds{10}) {
+        return;
+    }
+    u64 total{};
+    for (const u64 count : stats.skipped) {
+        total += count;
+    }
+    if (total != 0 || stats.dispatches_skipped != 0) {
+        const auto count = [&](DrawSkip reason) { return stats.skipped[static_cast<size_t>(reason)]; };
+        LOG_INFO(Render_Vulkan,
+                 "Draws skipped in the last 10 s: {} of {} (program unavailable {}, translating {}, "
+                 "compiling {}, failed {}, no geometry shaders {}, no mesh shaders {}, known issue "
+                 "{}); dispatches skipped {}",
+                 total, stats.draws, count(DrawSkip::ProgramUnavailable),
+                 count(DrawSkip::Translating), count(DrawSkip::Compiling), count(DrawSkip::Failed),
+                 count(DrawSkip::NoGeometryShaders), count(DrawSkip::NoMeshShaders),
+                 count(DrawSkip::KnownIssue), stats.dispatches_skipped);
+    }
+    stats = {.window = now};
 }
 
 void RasterizerVulkan::ReleaseFences(bool force) {

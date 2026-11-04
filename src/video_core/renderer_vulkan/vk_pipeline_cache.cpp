@@ -433,6 +433,9 @@ size_t GetTotalTranslationWorkers() {
     return forced ? *forced : std::max<size_t>(1, GetTotalPipelineWorkers() / 2);
 }
 
+/// Why the graphics pipeline creation running on this thread failed (read by its caller).
+thread_local DrawSkip t_creation_failure{};
+
 } // Anonymous namespace
 
 size_t ComputePipelineCacheKey::Hash() const noexcept {
@@ -829,6 +832,7 @@ GraphicsPipeline* PipelineCache::CurrentGraphicsPipeline() {
     }
     if (!RefreshStages(graphics_key.unique_hashes)) {
         current_pipeline = nullptr;
+        last_skip = DrawSkip::ProgramUnavailable;
         return nullptr;
     }
     graphics_key.state.Refresh(*maxwell3d, dynamic_features);
@@ -1134,16 +1138,20 @@ GraphicsPipeline* PipelineCache::CurrentGraphicsPipelineSlowPath() {
     if (it == graphics_cache.end()) {
         if (translating_graphics.contains(graphics_key)) {
             // Its translation is still running on a worker thread.
+            last_skip = DrawSkip::Translating;
             return nullptr;
         }
         ReportNewPipelineKey(graphics_key);
         if (!BuildNewGraphicsPipeline()) {
+            last_skip = DrawSkip::Translating;
             return nullptr;
         }
         it = graphics_cache.find(graphics_key);
     }
     auto& pipeline{it->second};
     if (!pipeline) {
+        const auto reason{failure_reasons.find(graphics_key)};
+        last_skip = reason != failure_reasons.end() ? reason->second : DrawSkip::Failed;
         return nullptr;
     }
     if (used_this_session.insert(pipeline.get()).second &&
@@ -1218,7 +1226,11 @@ GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) const
     if (!use_asynchronous_shaders) {
         return pipeline;
     }
-    return CanSkipDraw() ? nullptr : pipeline;
+    if (CanSkipDraw()) {
+        last_skip = DrawSkip::Compiling;
+        return nullptr;
+    }
+    return pipeline;
 }
 
 bool PipelineCache::CanSkipDraw() const noexcept {
@@ -1249,7 +1261,11 @@ bool PipelineCache::BuildNewGraphicsPipeline() {
             return WaitForGraphicsTranslation(*done);
         }
     }
-    graphics_cache.emplace(graphics_key, CreateGraphicsPipeline());
+    auto pipeline{CreateGraphicsPipeline()};
+    if (!pipeline) {
+        failure_reasons.insert_or_assign(graphics_key, t_creation_failure);
+    }
+    graphics_cache.emplace(graphics_key, std::move(pipeline));
     return true;
 }
 
@@ -1257,6 +1273,7 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
     ShaderPools& pools, const GraphicsPipelineCacheKey& key,
     std::span<Shader::Environment* const> envs, PipelineStatistics* statistics,
     bool build_in_parallel, bool allow_translation) try {
+    t_creation_failure = DrawSkip::Failed;
     auto hash = key.Hash();
     LOG_DEBUG(Render_Vulkan, "{:#016x}", hash);
     const ShaderTranslationKey translation_key{MakeShaderTranslationKey(key, device)};
@@ -1380,6 +1397,7 @@ std::shared_ptr<ReusableShaders> PipelineCache::BuildGraphicsShaders(
             if (!logged.exchange(true)) {
                 LOG_WARNING(Render_Vulkan, "Skipping native geometry shader pipelines: the device has no geometry shaders");
             }
+            t_creation_failure = DrawSkip::NoGeometryShaders;
             return nullptr;
         }
         Shader::Environment& env{*envs[env_index]};
@@ -1390,6 +1408,7 @@ std::shared_ptr<ReusableShaders> PipelineCache::BuildGraphicsShaders(
         if ((env.ShaderStage() == Shader::Stage::Task ||
              env.ShaderStage() == Shader::Stage::Mesh) &&
             !device.IsExtMeshShaderSupported()) {
+            t_creation_failure = DrawSkip::NoMeshShaders;
             return nullptr;
         }
 
@@ -1413,6 +1432,7 @@ std::shared_ptr<ReusableShaders> PipelineCache::BuildGraphicsShaders(
 
         if (device.GetDriverID() != VK_DRIVER_ID_NVIDIA_PROPRIETARY && Shader::Optimization::HasBrokenPattern(programs[index])) {
             LOG_WARNING(Render_Vulkan, "0x{:016x}: Skipping shader with known issues", key.unique_hashes[index]);
+            t_creation_failure = DrawSkip::KnownIssue;
             return nullptr;
         }
 
@@ -1761,6 +1781,7 @@ void PipelineCache::TranslateGraphicsPipeline(const GraphicsPipelineCacheKey& ke
             .pipeline = std::move(pipeline),
             .envs = std::move(envs),
             .build_time = std::chrono::steady_clock::now() - begin,
+            .failure = t_creation_failure,
         });
         num_translated.store(translated_graphics.size(), std::memory_order_release);
     }
@@ -1781,6 +1802,9 @@ void PipelineCache::AdoptTranslatedGraphicsPipelines() {
         // What CreateGraphicsPipeline() does after building on the GPU thread.
         if (result.pipeline && !pipeline_cache_filename.empty()) {
             StoreGraphicsPipeline(result.key, *result.pipeline, std::move(result.envs));
+        }
+        if (!result.pipeline) {
+            failure_reasons.insert_or_assign(result.key, result.failure);
         }
         graphics_cache.emplace(result.key, std::move(result.pipeline));
     }

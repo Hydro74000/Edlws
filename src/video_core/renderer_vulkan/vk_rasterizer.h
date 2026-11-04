@@ -7,6 +7,7 @@
 #pragma once
 
 #include <array>
+#include <chrono>
 
 #include <boost/container/static_vector.hpp>
 
@@ -173,7 +174,17 @@ private:
 
     template <typename Func>
     void PrepareDraw(bool is_indexed, Func&&);
+
+    struct DrawSkipStats {
+        std::array<u64, static_cast<size_t>(DrawSkip::Count)> skipped{};
+        u64 draws{};
+        u64 dispatches_skipped{};
+        std::chrono::steady_clock::time_point window{std::chrono::steady_clock::now()};
+    } draw_skip_stats;
     bool TryNx2IndirectReset();
+
+    /// Counts a draw, skipped or not, and logs the skipped ones by cause every 10 s.
+    void CountDraw(bool skipped);
 
     void FlushWork();
 
