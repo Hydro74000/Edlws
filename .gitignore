@@ -72,3 +72,20 @@ externals/generated
 plan_*.md
 audit_*.md
 
+# Local agent instructions and tooling
+AGENTS.md
+.claude/settings.local.json
+CLAUDE.local.md
+
+# Local tooling outputs
+compile_commands.json
+CMakeUserPresets.json
+.clangd
+.ccache/
+
+# NX2 debugging outputs (EDEN_NX2_SHADER_DUMP, EDEN_NX2_FRAME_CAPTURE, EDEN_NX2_CRASH_DUMP)
+/shaders_*/
+/frames_*/
+/crash_dumps/
+nx2_switches.txt
+
