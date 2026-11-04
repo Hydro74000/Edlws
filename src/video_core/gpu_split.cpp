@@ -42,25 +42,29 @@ void Pause() {
 }
 
 [[maybe_unused]] std::atomic<u32> g_back_thread_id{};
+[[maybe_unused]] std::atomic<u32> g_front_thread_id{};
 std::atomic<bool> g_back_busy{};
 
 } // Anonymous namespace
 
 void GpuSplit::CheckOwner(const char* where) {
 #ifdef _WIN32
-    if (!g_back_busy.load(std::memory_order_acquire)) {
+    const DWORD thread = GetCurrentThreadId();
+    // The front must never use the back's state, even while the back looks idle: its idle hook
+    // can run at any time. Other threads only while the back runs.
+    const bool front = thread == g_front_thread_id.load(std::memory_order_relaxed);
+    if (!front && !g_back_busy.load(std::memory_order_acquire)) {
         return;
     }
-    const DWORD thread = GetCurrentThreadId();
     if (thread == g_back_thread_id.load(std::memory_order_relaxed)) {
         return;
     }
     static std::atomic<u32> reports{};
-    if (reports.fetch_add(1) >= 12) {
+    if (reports.fetch_add(1) >= 48) {
         return;
     }
-    std::fprintf(stderr, "GPU split owner check: %s on thread %lu while the back runs\n", where,
-                 thread);
+    std::fprintf(stderr, "GPU split owner check: %s on thread %lu (%s)\n", where, thread,
+                 front ? "the front" : "while the back runs");
     void* frames[40];
     const USHORT count = RtlCaptureStackBackTrace(1, 40, frames, nullptr);
     for (USHORT i = 0; i < count; ++i) {
@@ -197,6 +201,12 @@ void GpuSplit::Publish() {
 }
 
 void GpuSplit::Drain() {
+#ifdef _WIN32
+    if (check_owner) [[unlikely]] {
+        // Only the front drains: remembered for CheckOwner.
+        g_front_thread_id.store(GetCurrentThreadId(), std::memory_order_relaxed);
+    }
+#endif
     consumed_cache = consumed.load(std::memory_order_acquire);
     if (consumed_cache == write_position) {
         return;
