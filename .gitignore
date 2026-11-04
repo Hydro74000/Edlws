@@ -67,3 +67,8 @@ vulkansdk*.exe
 
 # Build-time generated external sources
 externals/generated
+
+# Plans and audits
+plan_*.md
+audit_*.md
+
