@@ -356,7 +356,10 @@ void GpuSplit::BackLoop(std::stop_token stop_token) {
             }
             if (available == read_position && idle_hook != nullptr) {
                 hook_requested.store(false, std::memory_order_seq_cst);
+                // The hook flushes the scheduler: other threads using it now are reported too.
+                g_back_busy.store(true, std::memory_order_relaxed);
                 idle_hook(idle_argument);
+                g_back_busy.store(false, std::memory_order_release);
                 available = published.load(std::memory_order_acquire);
             }
             if (available == read_position) {
