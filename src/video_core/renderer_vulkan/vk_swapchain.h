@@ -40,6 +40,12 @@ public:
     /// `may_flush`: false on the async present thread (see Scheduler::Wait).
     bool AcquireNextImage(bool may_flush = true);
 
+    /// Whether the last AcquireNextImage got an image (false: the surface kept them, the frame
+    /// is to be dropped).
+    [[nodiscard]] bool IsImageAcquired() const noexcept {
+        return image_acquired;
+    }
+
     /// Presents the rendered image to the swapchain.
     void Present(VkSemaphore render_semaphore);
 
@@ -148,6 +154,10 @@ private:
 
     bool is_outdated{};
     bool is_suboptimal{};
+    bool image_acquired{};
+    /// The surface did not give an image back in time (a hidden or minimized Wayland window):
+    /// later acquires don't wait until it gives one again.
+    bool surface_stalled{};
 };
 
 } // namespace Vulkan

@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <limits>
+#include <utility>
 #include <vector>
 
 #ifdef __ANDROID__
@@ -159,9 +160,24 @@ void Swapchain::Create(
 }
 
 bool Swapchain::AcquireNextImage(bool may_flush) {
+    // A compositor can keep every image of a window it does not show (Wayland, minimized or on
+    // another desktop), and an unbounded wait then froze the GPU thread and the whole emulation.
+    // Wait a bounded time, then drop frames without waiting until the surface gives one back.
+    constexpr u64 AcquireTimeoutNs = 100'000'000;
     const VkResult result = device.GetLogical().AcquireNextImageKHR(
-        *swapchain, (std::numeric_limits<u64>::max)(), *present_semaphores[frame_index],
+        *swapchain, surface_stalled ? 0 : AcquireTimeoutNs, *present_semaphores[frame_index],
         VK_NULL_HANDLE, &image_index);
+    image_acquired = result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR;
+    if (result == VK_TIMEOUT || result == VK_NOT_READY) {
+        if (!std::exchange(surface_stalled, true)) {
+            LOG_WARNING(Render_Vulkan, "No swapchain image within 100 ms (window hidden?): "
+                                       "dropping frames until the surface returns one");
+        }
+        return false;
+    }
+    if (image_acquired && std::exchange(surface_stalled, false)) {
+        LOG_INFO(Render_Vulkan, "Swapchain images available again");
+    }
     switch (result) {
     case VK_SUCCESS:
         break;
