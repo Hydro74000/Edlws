@@ -1163,9 +1163,17 @@ void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 m
     if (VideoCommon::Nx2Profile::Enabled()) {
         VideoCommon::Nx2Profile::Add(VideoCommon::Nx2Profile::Counter::DmaReadBytes, read_bytes);
     }
-    if (memory_manager.IsMemoryDirty(source, read_bytes, VideoCommon::CacheType::BufferCache)) {
-        memory_manager.FlushRegion(source, read_bytes, VideoCommon::CacheType::BufferCache);
-    }
+    // Occlusion reports the macro reads reach guest memory only at the next fence (Mario Tennis
+    // Fever's characters), and GPU-written words may still be in the buffer cache. The flushes
+    // record copies: on the back (GpuSplit::RunOnBack).
+    const bool buffer_dirty =
+        memory_manager.IsMemoryDirty(source, read_bytes, VideoCommon::CacheType::BufferCache);
+    split.RunOnBack([memory = &memory_manager, source, read_bytes, buffer_dirty] {
+        memory->FlushRegion(source, read_bytes, VideoCommon::CacheType::QueryCache);
+        if (buffer_dirty) {
+            memory->FlushRegion(source, read_bytes, VideoCommon::CacheType::BufferCache);
+        }
+    });
     for (u32 i = 0; i < words; ++i) {
         const u32 word = memory_manager.Read<u32>(source + u64{i} * sizeof(u32));
         if (method == 0x158) {

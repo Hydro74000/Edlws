@@ -100,8 +100,9 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
                     split.Defer([gpu = &system.GPU()] { gpu->TickWork(); });
                 } else if (auto* run = std::get_if<RunCommand>(&next.data)) {
                     if (run->before_later_reads) {
+                        // On the back, which owns the rasterizer, then waited for.
+                        split.DeferFunction(std::move(run->func));
                         split.Drain();
-                        run->func();
                     } else {
                         split.DeferFunction(std::move(run->func));
                     }

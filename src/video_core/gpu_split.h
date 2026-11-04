@@ -110,6 +110,19 @@ public:
     }
     void DeferFunction(std::function<void()>&& func);
 
+    /// Runs `func` on the back and waits for it (inline without the split, or on the back).
+    /// For rasterizer work the front needs done now: after a Drain the back is not idle for
+    /// good, its idle hook flushes the scheduler, so the front must not record into it itself.
+    template <typename Func>
+    void RunOnBack(const Func& func) {
+        if (Active() && !OnBackThread()) {
+            Defer(func);
+            Drain();
+        } else {
+            func();
+        }
+    }
+
     /// EDEN_NX2_SPLIT_CHECK=1 (debug): reports, with its stack, a thread other than the back
     /// using back-owned state (the Vulkan scheduler) while the back runs entries.
     static inline bool check_owner{};

@@ -251,11 +251,13 @@ bool DmaPusher::Step() {
     }
 
     if (signal_sync) {
-        VideoCommon::GpuSplit::Get().Drain();
-        rasterizer->SignalFence([this]() {
-            std::scoped_lock lk(sync_mutex);
-            synced = true;
-            sync_cv.notify_all();
+        // On the back, like the rest of the rasterizer's work (GpuSplit::RunOnBack).
+        VideoCommon::GpuSplit::Get().RunOnBack([rasterizer = rasterizer, self = this] {
+            rasterizer->SignalFence([self]() {
+                std::scoped_lock lk(self->sync_mutex);
+                self->synced = true;
+                self->sync_cv.notify_all();
+            });
         });
     }
 
@@ -639,8 +641,11 @@ void DmaPusher::FlushGpuWrittenCommands(GPUVAddr address, size_t size) {
     const GPUVAddr end_page = (address + size + 0xfff) & ~GPUVAddr{0xfff};
     if (memory_manager.IsMemoryDirty(first_page, end_page - first_page,
                                      VideoCommon::CacheType::BufferCache)) {
-        memory_manager.FlushRegion(first_page, end_page - first_page,
-                                   VideoCommon::CacheType::BufferCache);
+        // The flush records copies: on the back (GpuSplit::RunOnBack).
+        VideoCommon::GpuSplit::Get().RunOnBack(
+            [memory = &memory_manager, first_page, size = end_page - first_page] {
+                memory->FlushRegion(first_page, size, VideoCommon::CacheType::BufferCache);
+            });
     }
     if (rasterizer == nullptr) {
         return;
