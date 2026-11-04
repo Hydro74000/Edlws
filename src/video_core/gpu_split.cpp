@@ -23,6 +23,7 @@
 #include "video_core/engines/engine_interface.h"
 #include "video_core/gpu_split.h"
 #include "video_core/nx2.h"
+#include "video_core/nx2_long_wait.h"
 #include "video_core/nx2_profile.h"
 
 namespace VideoCommon {
@@ -174,6 +175,8 @@ void GpuSplit::WaitForSpace(size_t words) {
     }
     Publish();
     Nx2Profile::Scope scope{Nx2Profile::Zone::SplitDrain};
+    const LongWait long_wait{"Split front waiting for room in the ring",
+                             std::source_location::current()};
     for (u32 spins = 0;; ++spins) {
         consumed_cache = consumed.load(std::memory_order_acquire);
         if (write_position + words - consumed_cache <= RingWords) {
@@ -200,7 +203,7 @@ void GpuSplit::Publish() {
     }
 }
 
-void GpuSplit::Drain() {
+void GpuSplit::Drain(const std::source_location& where) {
 #ifdef _WIN32
     if (check_owner) [[unlikely]] {
         // Only the front drains: remembered for CheckOwner.
@@ -213,6 +216,7 @@ void GpuSplit::Drain() {
     }
     Publish();
     Nx2Profile::Scope scope{Nx2Profile::Zone::SplitDrain};
+    const LongWait long_wait{"Split front waiting for the back", where};
     for (u32 spins = 0;; ++spins) {
         consumed_cache = consumed.load(std::memory_order_acquire);
         if (consumed_cache == write_position) {
@@ -227,7 +231,7 @@ void GpuSplit::Drain() {
     }
 }
 
-bool GpuSplit::WaitForWriters() {
+bool GpuSplit::WaitForWriters(const std::source_location& where) {
     const u64 target = std::min(last_writer_position, write_position);
     consumed_cache = consumed.load(std::memory_order_acquire);
     if (consumed_cache >= target) {
@@ -235,6 +239,7 @@ bool GpuSplit::WaitForWriters() {
     }
     wait_target.store(target, std::memory_order_seq_cst);
     Publish();
+    const LongWait long_wait{"Split front waiting for the back's compute and copies", where};
     for (u32 spins = 0;; ++spins) {
         consumed_cache = consumed.load(std::memory_order_acquire);
         if (consumed_cache >= target) {

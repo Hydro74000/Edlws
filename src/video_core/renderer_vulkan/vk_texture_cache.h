@@ -10,6 +10,7 @@
 #include <deque>
 #include <memory>
 #include <optional>
+#include <source_location>
 #include <span>
 
 #include "video_core/texture_cache/texture_cache_base.h"
@@ -59,7 +60,7 @@ public:
                                  DescriptorPool& descriptor_pool,
                                  ComputePassDescriptorQueue& compute_pass_descriptor_queue);
 
-    void Finish();
+    void Finish(const std::source_location& where = std::source_location::current());
 
     StagingBufferRef UploadStagingBuffer(size_t size, bool deferred = false);
 

@@ -14,6 +14,7 @@
 #include <boost/container/static_vector.hpp>
 #include <fmt/format.h>
 
+#include "video_core/nx2_long_wait.h"
 #include "video_core/renderer_vulkan/pipeline_helper.h"
 
 #include "common/bit_field.h"
@@ -687,7 +688,9 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
     scheduler.RequestRenderpass(texture_cache.GetFramebuffer());
     if (!is_built.load(std::memory_order::relaxed)) {
         // Wait for the pipeline to be built
-        scheduler.Record([this](vk::CommandBuffer) {
+        scheduler.Record([this, where = std::source_location::current()](vk::CommandBuffer) {
+            const VideoCommon::LongWait long_wait{
+                "Vulkan worker waiting for a graphics pipeline build", where};
             std::unique_lock lock{build_mutex};
             build_condvar.wait(lock, [this] { return is_built.load(std::memory_order::relaxed); });
         });

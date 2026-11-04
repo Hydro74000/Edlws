@@ -7,6 +7,7 @@
 #include <cstring>
 #include <functional>
 #include <memory>
+#include <source_location>
 #include <thread>
 #include <type_traits>
 
@@ -114,10 +115,11 @@ public:
     /// For rasterizer work the front needs done now: after a Drain the back is not idle for
     /// good, its idle hook flushes the scheduler, so the front must not record into it itself.
     template <typename Func>
-    void RunOnBack(const Func& func) {
+    void RunOnBack(const Func& func,
+                   const std::source_location& where = std::source_location::current()) {
         if (Active() && !OnBackThread()) {
             Defer(func);
-            Drain();
+            Drain(where);
         } else {
             func();
         }
@@ -130,8 +132,9 @@ public:
 
     /// Makes what was sent visible to the back.
     void Publish();
-    /// Waits until the back executed everything sent so far.
-    void Drain();
+    /// Waits until the back executed everything sent so far. `where`: who waits, for the log of
+    /// long waits.
+    void Drain(const std::source_location& where = std::source_location::current());
 
     /// Compute or copy work was just sent: what can write GPU-written command lists.
     void NoteWriter() {
@@ -139,7 +142,7 @@ public:
     }
     /// Waits until the back executed the compute and copy work sent so far (not what came after).
     /// Returns whether any of it was still queued.
-    bool WaitForWriters();
+    bool WaitForWriters(const std::source_location& where = std::source_location::current());
 
 private:
     enum class Kind : u64 {

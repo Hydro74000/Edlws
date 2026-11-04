@@ -469,11 +469,13 @@ void BufferCacheRuntime::WaitSubmittedTick(u64 tick) {
         scheduler.Wait(tick);
         return;
     }
+    const VideoCommon::LongWait long_wait{"Wait for a copy on the host GPU",
+                                          std::source_location::current()};
     master.Wait(tick);
 }
 
-void BufferCacheRuntime::Finish() {
-    scheduler.Finish();
+void BufferCacheRuntime::Finish(const std::source_location& where) {
+    scheduler.Finish({}, {}, where);
 }
 
 bool BufferCacheRuntime::CanReorderUpload(const Buffer& buffer,

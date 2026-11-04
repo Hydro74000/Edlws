@@ -123,19 +123,21 @@ bool Scheduler::WaitSubmitted(u64 tick) {
     return true;
 }
 
-void Scheduler::Finish(VkSemaphore signal_semaphore, VkSemaphore wait_semaphore) {
+void Scheduler::Finish(VkSemaphore signal_semaphore, VkSemaphore wait_semaphore,
+                       const std::source_location& where) {
     if (VideoCommon::GpuSplit::check_owner) [[unlikely]] {
         VideoCommon::GpuSplit::CheckOwner("Scheduler::Finish");
     }
     // When finishing, we need to wait for the submission to have executed on the device.
     const u64 presubmit_tick = CurrentTick();
     SubmitExecution(signal_semaphore, wait_semaphore);
-    Wait(presubmit_tick);
+    Wait(presubmit_tick, 0.0, true, where);
     AllocateNewContext();
 }
 
-void Scheduler::WaitWorker() {
+void Scheduler::WaitWorker(const std::source_location& where) {
     DispatchWork();
+    const VideoCommon::LongWait long_wait{"Wait for the Vulkan worker", where};
 
     // Ensure the queue is drained.
     {

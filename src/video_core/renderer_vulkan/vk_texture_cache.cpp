@@ -1249,8 +1249,8 @@ TextureCacheRuntime::TextureCacheRuntime(const Device& device_, Scheduler& sched
     }
 }
 
-void TextureCacheRuntime::Finish() {
-    scheduler.Finish();
+void TextureCacheRuntime::Finish(const std::source_location& where) {
+    scheduler.Finish({}, {}, where);
 }
 
 StagingBufferRef TextureCacheRuntime::UploadStagingBuffer(size_t size, bool deferred) {

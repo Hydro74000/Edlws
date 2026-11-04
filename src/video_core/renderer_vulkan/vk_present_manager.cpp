@@ -8,6 +8,7 @@
 #include "common/thread.h"
 #include "core/frontend/emu_window.h"
 #ifdef HAS_LSFG
+#include "video_core/nx2_long_wait.h"
 #include "video_core/renderer_vulkan/present/lsfg_common.h"
 #endif
 #include "video_core/renderer_vulkan/vk_present_manager.h"
@@ -171,6 +172,8 @@ PresentManager::~PresentManager() = default;
 
 Frame* PresentManager::GetRenderFrame() {
 
+    const VideoCommon::LongWait long_wait{"Present waiting for a free frame",
+                                          std::source_location::current()};
     // Wait for free presentation frames
     std::unique_lock lock{free_mutex};
     free_cv.wait(lock, [this] { return !free_queue.empty(); });

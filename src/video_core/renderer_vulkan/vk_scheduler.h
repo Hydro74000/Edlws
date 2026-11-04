@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <functional>
 #include <memory>
+#include <source_location>
 #include <thread>
 #include <utility>
 #include <queue>
@@ -19,6 +20,7 @@
 #include "common/common_types.h"
 #include "common/polyfill_thread.h"
 #include "common/settings.h"
+#include "video_core/nx2_long_wait.h"
 #include "video_core/gpu_split.h"
 #include "video_core/renderer_vulkan/vk_master_semaphore.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
@@ -49,7 +51,8 @@ public:
     u64 Flush(VkSemaphore signal_semaphore = {}, VkSemaphore wait_semaphore = {});
 
     /// Sends the current execution context to the GPU and waits for it to complete.
-    void Finish(VkSemaphore signal_semaphore = {}, VkSemaphore wait_semaphore = {});
+    void Finish(VkSemaphore signal_semaphore = {}, VkSemaphore wait_semaphore = {},
+                const std::source_location& where = std::source_location::current());
 
     /// On the split GPU thread, a fence or a command list copy submits only if the last
     /// submission is older than a window (EDEN_NX2_FENCE_FLUSH_US, default 500 us, 0 submits at
@@ -69,7 +72,7 @@ public:
 
     /// Waits for the worker thread to finish executing everything. After this function returns it's
     /// safe to touch worker resources.
-    void WaitWorker();
+    void WaitWorker(const std::source_location& where = std::source_location::current());
 
     /// Sends currently recorded work to the worker thread.
     void DispatchWork();
@@ -167,8 +170,10 @@ public:
     /// into the current chunk while that thread does (corrupt command buffers, crashes). They
     /// wait for the recording thread to submit the tick instead, and give up after 20 ms (it may
     /// be waiting for them).
-    void Wait(u64 tick, double target_fps = 0.0, bool may_flush = true) {
-        if (tick > 0 && (may_flush || WaitForSubmission(tick))) {
+    void Wait(u64 tick, double target_fps = 0.0, bool may_flush = true,
+              const std::source_location& where = std::source_location::current()) {
+        if (tick > 0 && !master_semaphore->IsFree(tick) && (may_flush || WaitForSubmission(tick))) {
+            const VideoCommon::LongWait long_wait{"Wait for the host GPU", where};
             if (tick >= master_semaphore->CurrentTick()) {
                 Flush();
             }
