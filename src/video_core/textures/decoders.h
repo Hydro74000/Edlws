@@ -45,6 +45,13 @@ void SwizzleSubrect(std::span<u8> output, std::span<const u8> input, u32 bytes_p
                     u32 height, u32 depth, u32 origin_x, u32 origin_y, u32 extent_x, u32 extent_y,
                     u32 block_height, u32 block_depth, u32 pitch_linear, bool native_tiling = false);
 
+/// Copies a whole block linear 2D surface onto one laid out with blocks of another height (or the
+/// same). Both are made of the same GOBs, laid out the same inside, only in another order: no
+/// pixel is unswizzled. The width in bytes must be a multiple of 64 (a GOB) and the height of
+/// both surfaces' block heights in lines, so that neither has padding.
+void CopyBlockLinearGobs(std::span<u8> output, std::span<const u8> input, u32 width_bytes,
+                         u32 height, u32 input_block_height, u32 output_block_height);
+
 /// Copies a tiled subrectangle into a linear surface.
 void UnswizzleSubrect(std::span<u8> output, std::span<const u8> input, u32 bytes_per_pixel,
                       u32 width, u32 height, u32 depth, u32 origin_x, u32 origin_y, u32 extent_x,

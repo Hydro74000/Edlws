@@ -254,6 +254,29 @@ void UnswizzleSubrect(std::span<u8> output, std::span<const u8> input, u32 bytes
     }
 }
 
+void CopyBlockLinearGobs(std::span<u8> output, std::span<const u8> input, u32 width_bytes,
+                         u32 height, u32 input_block_height, u32 output_block_height) {
+    const size_t size = size_t{width_bytes} * height;
+    ASSERT(input.size() >= size && output.size() >= size);
+    if (input_block_height == output_block_height) {
+        std::memcpy(output.data(), input.data(), size);
+        return;
+    }
+    const u32 width_gobs = width_bytes / GOB_SIZE_X;
+    const u32 height_gobs = height / GOB_SIZE_Y;
+    // Blocks are one GOB wide and 2^block_height GOBs tall, in rows of width_gobs blocks.
+    const auto gob_offset = [width_gobs](u32 block_height, u32 gob_x, u32 gob_y) {
+        const size_t block = size_t{gob_y >> block_height} * width_gobs + gob_x;
+        return ((block << block_height) | (gob_y & ((1U << block_height) - 1))) * GOB_SIZE;
+    };
+    for (u32 gob_y = 0; gob_y < height_gobs; ++gob_y) {
+        for (u32 gob_x = 0; gob_x < width_gobs; ++gob_x) {
+            std::memcpy(output.data() + gob_offset(output_block_height, gob_x, gob_y),
+                        input.data() + gob_offset(input_block_height, gob_x, gob_y), GOB_SIZE);
+        }
+    }
+}
+
 std::size_t CalculateSize(bool tiled, u32 bytes_per_pixel, u32 width, u32 height, u32 depth,
                           u32 block_height, u32 block_depth) {
     if (tiled) {

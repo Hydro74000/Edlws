@@ -170,6 +170,31 @@ SubSurface CoveredRows(const Fermi2D::Surface& surface, u32 bytes_per_pixel, s32
     return part.offset + part.size <= surface_size ? part : whole;
 }
 
+// Whether the blit copies a whole block linear 2D surface onto one of the same size and format,
+// both without padding in their blocks: the two are then the same GOBs, maybe in another order
+// (blocks of another height), and Tegra::Texture::CopyBlockLinearGobs copies them.
+bool IsWholeSurfaceGobCopy(const Fermi2D::Surface& src, const Fermi2D::Surface& dst,
+                           const Fermi2D::Config& config, u32 bytes_per_pixel) {
+    if (src.format != dst.format || src.linear != Fermi2D::MemoryLayout::BlockLinear ||
+        dst.linear != Fermi2D::MemoryLayout::BlockLinear || src.width != dst.width ||
+        src.height != dst.height || src.depth != 1 || dst.depth != 1 ||
+        src.block_width.Value() != 0 || dst.block_width.Value() != 0 ||
+        src.block_height.Value() > 5 || dst.block_height.Value() > 5) {
+        return false;
+    }
+    const s32 width = static_cast<s32>(src.width);
+    const s32 height = static_cast<s32>(src.height);
+    if (config.src_x0 != 0 || config.src_y0 != 0 || config.src_x1 != width ||
+        config.src_y1 != height || config.dst_x0 != 0 || config.dst_y0 != 0 ||
+        config.dst_x1 != width || config.dst_y1 != height) {
+        return false;
+    }
+    const u32 block_lines = Tegra::Texture::GOB_SIZE_Y
+                            << (std::max)(src.block_height.Value(), dst.block_height.Value());
+    return (src.width * bytes_per_pixel) % Tegra::Texture::GOB_SIZE_X == 0 &&
+           src.height % block_lines == 0;
+}
+
 } // namespace
 
 struct SoftwareBlitEngine::BlitEngineImpl {
@@ -247,6 +272,21 @@ bool SoftwareBlitEngine::Blit(Fermi2D::Surface& src, Fermi2D::Surface& dst,
     const auto src_bytes_per_pixel = BytesPerBlock(*src_pixel_format);
     const auto dst_bytes_per_pixel = BytesPerBlock(*dst_pixel_format);
     const size_t src_size = get_surface_size(src, src_bytes_per_pixel);
+    if (IsWholeSurfaceGobCopy(src, dst, config, src_bytes_per_pixel)) {
+        // Title 1 copies 2048x2048 RGBA32F maps between blocks of 16 and 8 GOBs while loading:
+        // unswizzling and swizzling each again took ~50 ms of the GPU thread.
+        const Tegra::Memory::GpuGuestMemory<u8, Tegra::Memory::GuestMemoryFlags::SafeRead> input(
+            memory_manager, src.Address(), src_size, &impl->src_buffer);
+        {
+            Tegra::Memory::GpuGuestMemoryScoped<u8, Tegra::Memory::GuestMemoryFlags::SafeWrite>
+                output(memory_manager, dst.Address(), src_size, &impl->dst_buffer);
+            Tegra::Texture::CopyBlockLinearGobs(output, input, src.width * src_bytes_per_pixel,
+                                                src.height, src.block_height.Value(),
+                                                dst.block_height.Value());
+        } // output writes the destination back here
+        impl->ReleaseLargeBuffers();
+        return true;
+    }
     const SubSurface src_part = CoveredRows(src, src_bytes_per_pixel, config.src_x0, config.src_y0,
                                             src_extent_x, src_extent_y, src_size);
 
