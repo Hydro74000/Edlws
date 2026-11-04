@@ -1801,7 +1801,13 @@ private:
                 const long long frame = to_us(entered - m_stats.last_present);
                 m_stats.frame_us += frame;
                 m_stats.max_frame_us = (std::max)(m_stats.max_frame_us, frame);
-                m_stats.hitches += frame > 100'000 ? 1 : 0;
+                if (frame > 100'000) {
+                    ++m_stats.hitches;
+                    // One line per hitch, so its time can be matched with what the log shows
+                    // around it (pipeline builds, texture decodes, loads).
+                    LOG_INFO(Service, "nx2:vi2 present #{} hitch: frame {} ms, GPU fence {} ms",
+                             m_presents, frame / 1000, to_us(waited - entered) / 1000);
+                }
             }
             m_stats.last_present = entered;
             if (++m_stats.presents == 600) {
