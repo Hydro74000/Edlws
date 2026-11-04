@@ -374,7 +374,22 @@ bool IsShaderReuseAllowed() {
     return value == nullptr || value[0] != '0';
 }
 
+// EDEN_NX2_PIPELINE_WORKERS / EDEN_NX2_TRANSLATION_WORKERS=<n>: thread counts for the driver
+// compiles and the native translations (A/B tests of how much they take from the game's threads).
+std::optional<size_t> WorkerCountOverride(const char* name) {
+    const char* const value = std::getenv(name);
+    if (value == nullptr) {
+        return std::nullopt;
+    }
+    const unsigned long count = std::strtoul(value, nullptr, 10);
+    return count == 0 ? std::nullopt : std::optional<size_t>{count};
+}
+
 size_t GetTotalPipelineWorkers() {
+    static const std::optional<size_t> forced{WorkerCountOverride("EDEN_NX2_PIPELINE_WORKERS")};
+    if (forced) {
+        return *forced;
+    }
     const size_t max_core_threads =
         std::max<size_t>(static_cast<size_t>(std::thread::hardware_concurrency()), 2ULL) - 1ULL;
 #ifdef __ANDROID__
@@ -414,7 +429,8 @@ std::chrono::microseconds GetTranslationWaitBudget() {
 // pipeline workers' count, so they cannot hold up the driver compiles queued on those (compute
 // pipelines wait for theirs).
 size_t GetTotalTranslationWorkers() {
-    return std::max<size_t>(1, GetTotalPipelineWorkers() / 2);
+    static const std::optional<size_t> forced{WorkerCountOverride("EDEN_NX2_TRANSLATION_WORKERS")};
+    return forced ? *forced : std::max<size_t>(1, GetTotalPipelineWorkers() / 2);
 }
 
 } // Anonymous namespace
@@ -486,6 +502,8 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
                            Common::ThreadPlacement::Background),
       translation_workers(num_translation_threads, "VkPipelineTranslator", {},
                           Common::ThreadPlacement::Background) {
+    LOG_INFO(Render_Vulkan, "Pipeline compiles run on {} worker threads",
+             device.HasBrokenParallelShaderCompiling() ? 1 : GetTotalPipelineWorkers());
     if (use_async_translation) {
         LOG_INFO(Render_Vulkan,
                  "Native graphics pipelines are translated on {} worker threads, wait budget "
