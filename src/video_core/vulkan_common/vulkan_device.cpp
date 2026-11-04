@@ -1388,10 +1388,22 @@ bool Device::GetSuitability(bool requires_swapchain) {
     // Intel Windows < 27.20.100.0: Broken VertexInputDynamicState
     // Same for NVIDIA Proprietary < 580.119.02, unknown when VIDS was first NOT broken
     // Disable VertexInputDynamicState on old Intel Windows drivers
+    // EDEN_NX2_VIDS=0 disables it on any driver, =1 keeps it on these.
     if (extensions.vertex_input_dynamic_state) {
-        const u32 version = (properties.properties.driverVersion << 3) >> 3;
-        if ((driver_id == VK_DRIVER_ID_INTEL_PROPRIETARY_WINDOWS && version < VK_MAKE_API_VERSION(27, 20, 100, 0))
-        || (driver_id == VK_DRIVER_ID_NVIDIA_PROPRIETARY && version < VK_MAKE_API_VERSION(580, 119, 02, 0))) {
+        const u32 raw_version = properties.properties.driverVersion;
+        const u32 version = (raw_version << 3) >> 3;
+        // NVIDIA packs its version as 10.8.8.6 bits, which VK_MAKE_API_VERSION's 7-bit major
+        // cannot hold: compare the decoded numbers.
+        const auto nvidia_version = [raw_version] {
+            return std::array<u32, 3>{(raw_version >> 22) & 0x3ff, (raw_version >> 14) & 0xff,
+                                      (raw_version >> 6) & 0xff};
+        };
+        const char* const forced = std::getenv("EDEN_NX2_VIDS");
+        const bool broken =
+            (driver_id == VK_DRIVER_ID_INTEL_PROPRIETARY_WINDOWS && version < VK_MAKE_API_VERSION(27, 20, 100, 0)) ||
+            (driver_id == VK_DRIVER_ID_NVIDIA_PROPRIETARY &&
+             nvidia_version() < std::array<u32, 3>{580, 119, 2});
+        if (forced ? forced[0] == '0' : broken) {
             LOG_WARNING(Render_Vulkan, "Disabling broken VK_EXT_vertex_input_dynamic_state");
             RemoveExtensionFeature(extensions.vertex_input_dynamic_state, features.vertex_input_dynamic_state, VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME);
         }
