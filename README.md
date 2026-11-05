@@ -9,31 +9,22 @@
 
 <h1 align="center">
   <br>
-  <a href="https://git.eden-emu.dev/eden-emu/eden"><img src="https://github.com/user-attachments/assets/35031845-4bfa-4916-8bf5-bc3bce67d5e2" alt="Eglantine" width="200"></a>
+  <a href="https://github.com/Hydro74000/Edlws"><img src="./dist/Edelweiss.png" alt="Edelweiss" width="200"></a>
   <br>
-  <b>Eglantine</b>
+  <b>Edelweiss</b>
   <br>
 </h1>
 
-<h4 align="center"><b>Eglantine</b> is a free and opensource (FOSS) Switch 2 emulator, derived from Eden, Yuzu and Sudachi - started by developer Camille LaVey.
+<h4 align="center"><b>Edelweiss</b> (Edlws) is a free and open source (FOSS) Switch 2 emulator, forked from Eglantine and PokeDinner, themselves derived from Eden, Yuzu and Sudachi.
 It's written in C++ with portability in mind, with builds for Windows, Linux and macOS
 </h4>
-
-<p align="center">
-    </a>
-    <a href="https://discord.gg/jCCZ58VExk">
-        <img src="https://img.shields.io/discord/1367654015269339267?color=5865F2&label=Eglantine&logo=discord&logoColor=white"
-            alt="Discord">
-    </a>
-  
-</p>
 
 <p align="center">
   <a href="#compatibility">Compatibility</a> |
   <a href="#development">Development</a> |
   <a href="#building">Building</a> |
   <a href="#download">Download</a> |
-  <a href="#support">Support</a> |
+  <a href="#credits">Credits</a> |
   <a href="#license">License</a>
 </p>
 
@@ -44,8 +35,6 @@ The emulator is capable of running Mario Kart World at decent/full speed dependi
 A list of supported games will be available in future. Please be patient.
 
 ## Development
-
-For development discussions, please join us on [Discord](https://discord.gg/jCCZ58VExk)
 
 If you would like to contribute, we are open to new developers and pull requests. Please ensure that your work is of a high standard and properly documented. You can also contact any of the developers on Discord or Stoat to learn more about the current state of the emulator.
 
@@ -61,24 +50,12 @@ For information on provided development tooling, see the [Tools directory](./too
 
 ## Download
 
-You can download the latest releases from [here](https://github.com/Djihads80/Eglantine/releases).
+You can download the latest releases from [here](https://github.com/Hydro74000/Edlws/releases).
 
-## Support
+## Credits
 
-We currently do not take in any donations for the time being
-
-If you would prefer to support us in a different way, please join our [Discord](https://discord.gg/jCCZ58VExk)
-
-## Star History
-
-<a href="https://www.star-history.com/?repos=djihads80%2Feglantine&type=date&legend=bottom-right">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=djihads80/eglantine&type=date&theme=dark&legend=bottom-right" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=djihads80/eglantine&type=date&legend=bottom-right" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=djihads80/eglantine&type=date&legend=bottom-right" />
- </picture>
-</a>
+Edelweiss builds on the work of the [Eglantine](https://github.com/Djihads80/Eglantine), PokeDinner, Eden, Yuzu and Sudachi projects and their contributors.
 
 ## License
 
-Eglantine is licensed under the GPLv3 (or any later version). Refer to the [LICENSE.txt](https://github.com/Djihads80/Eglantine/blob/nx2/LICENSE.txt) file.
+Edelweiss is licensed under the GPLv3 (or any later version). Refer to the [LICENSE.txt](https://github.com/Hydro74000/Edlws/blob/edlws/LICENSE.txt) file.

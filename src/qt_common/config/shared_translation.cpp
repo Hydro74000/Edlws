@@ -149,7 +149,7 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
            tr("Runs a Switch 2 game's own DLSS (its upscaling network, translated for this GPU) "
               "instead of AMD FSR 3.1 in its place.\nAMD FSR 3.1 still draws while the network is "
               "checked, when it can't run on this GPU, with resolution scaling, and for the rest "
-              "of the session if its output fails Eglantine's checks.\nTakes effect when a game "
+              "of the session if its output fails Edelweiss's checks.\nTakes effect when a game "
               "starts."));
     INSERT(Settings, fsr_sharpening_slider, tr("RCAS Sharpness:"),
            tr("Strength of RCAS (AMD's contrast-adaptive sharpening) on the upscaler used in place "
@@ -158,7 +158,7 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
     INSERT(Settings, nvidia_dlss, tr("Use NVIDIA DLSS in place of a game's DLSS"),
            tr("Uses NVIDIA DLSS on GeForce RTX cards in place of a Switch 2 game's own DLSS, "
               "instead of AMD FSR 3.1.\nNeeds NVIDIA's Streamline loader, and NVIDIA DLSS unless "
-              "the NVIDIA app has downloaded it; Eglantine does not ship NVIDIA's files. Use the "
+              "the NVIDIA app has downloaded it; Edelweiss does not ship NVIDIA's files. Use the "
               "download button below.\nTakes effect when a game starts."));
     INSERT(Settings, anti_aliasing, tr("Anti-Aliasing Method:"),
            tr("The anti-aliasing method to use.\nSMAA offers the best quality.\nFXAA "

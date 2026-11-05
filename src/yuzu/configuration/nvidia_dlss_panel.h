@@ -6,7 +6,7 @@
 
 #pragma once
 
-#ifdef EGLANTINE_STREAMLINE
+#ifdef EDELWEISS_STREAMLINE
 
 #include <QWidget>
 

@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-pkgname=eglantine-git
+pkgname=edelweiss-git
 pkgver=0.r0.g0000000
 pkgrel=1
 pkgdesc='Nintendo Switch emulator (development branch)'
 arch=('x86_64')
-url='https://github.com/Djihads80/Eglantine'
+url='https://github.com/Hydro74000/Edlws'
 license=('GPL-3.0-or-later')
 depends=(
   'enet'
@@ -41,18 +41,18 @@ makedepends=(
 optdepends=(
   'qt6-wayland: native Wayland support'
 )
-provides=('eglantine')
-conflicts=('eglantine')
-source=("eglantine::git+https://github.com/Djihads80/Eglantine.git#branch=nx2")
+provides=('edelweiss')
+conflicts=('edelweiss')
+source=("edelweiss::git+https://github.com/Hydro74000/Edlws.git#branch=edlws")
 sha256sums=('SKIP')
 
 pkgver() {
-  cd "$srcdir/eglantine"
+  cd "$srcdir/edelweiss"
   printf '0.r%s.g%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
 }
 
 build() {
-  cmake -S "$srcdir/eglantine" -B "$srcdir/build" -G Ninja \
+  cmake -S "$srcdir/edelweiss" -B "$srcdir/build" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX=/usr \
     -DCMAKE_INSTALL_LIBDIR=lib \
@@ -71,8 +71,8 @@ build() {
 package() {
   DESTDIR="$pkgdir" cmake --install "$srcdir/build"
 
-  # The desktop entry uses the Eglantine icon name; the upstream install uses
+  # The desktop entry uses the Edelweiss icon name; the upstream install uses
   # the older Eden filename, so install an alias that matches the desktop file.
-  install -Dm644 "$srcdir/eglantine/dist/dev.eden_emu.eden.svg" \
-    "$pkgdir/usr/share/icons/hicolor/scalable/apps/dev.eglantine.eglantine.svg"
+  install -Dm644 "$srcdir/edelweiss/dist/dev.eden_emu.eden.svg" \
+    "$pkgdir/usr/share/icons/hicolor/scalable/apps/dev.edelweiss.edelweiss.svg"
 }

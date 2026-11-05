@@ -33,7 +33,7 @@
 #include "video_core/vulkan_common/vulkan_device.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 #include "video_core/gpu_logging/gpu_logging.h"
-#ifdef EGLANTINE_STREAMLINE
+#ifdef EDELWEISS_STREAMLINE
 #include "video_core/vulkan_common/streamline.h"
 #endif
 
@@ -746,9 +746,9 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
         RemoveExtensionFeature(extensions.descriptor_buffer, features.descriptor_buffer,
                                VK_EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME);
     }
-#ifdef EGLANTINE_STREAMLINE
+#ifdef EDELWEISS_STREAMLINE
     // NVIDIA's DLSS needs buffer device addresses: keep the feature enabled for
-    // it, but leave Eglantine's own buffers as they are without descriptor buffers.
+    // it, but leave Edelweiss's own buffers as they are without descriptor buffers.
     const bool dlss_wants_device_address =
         streamline_extensions && features.buffer_device_address.bufferDeviceAddress;
     if (!extensions.descriptor_buffer && dlss_wants_device_address) {
@@ -765,7 +765,7 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
     graphics_queue = logical.GetQueue(graphics_family);
     present_queue = logical.GetQueue(present_family);
 
-#ifdef EGLANTINE_STREAMLINE
+#ifdef EDELWEISS_STREAMLINE
     if (streamline_extensions) {
         streamline_attached =
             Streamline::AttachDevice(instance, physical, *logical, graphics_family, dld);
@@ -827,7 +827,7 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
 }
 
 Device::~Device() {
-#ifdef EGLANTINE_STREAMLINE
+#ifdef EDELWEISS_STREAMLINE
     if (streamline_attached) {
         Streamline::Stop();
     }
@@ -1149,7 +1149,7 @@ bool Device::GetSuitability(bool requires_swapchain) {
         extensions.robustness_2 = false;
     }
 
-#ifdef EGLANTINE_STREAMLINE
+#ifdef EDELWEISS_STREAMLINE
     // The extensions NVIDIA's DLSS asks for, where the device has them all.
     if (Streamline::WantsDevice()) {
         const std::vector<std::string> wanted = Streamline::DeviceExtensions();

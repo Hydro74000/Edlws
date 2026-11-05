@@ -9,8 +9,7 @@ on:
         default: true
   push:
     branches:
-      - nx2
-      - nx2-experimental
+      - edlws
     # A binary only changes when build inputs change; docs-only pushes skip the build.
     paths:
       - "src/**"
@@ -31,7 +30,7 @@ permissions:
 
 # Clang major the Linux PGO build uses, from apt.llvm.org. A profile is written by a current clang
 # and an older reader refuses it, so this has to stay at or above whatever produced
-# eglantine.profdata; bump it when a refreshed profile needs a newer LLVM.
+# edelweiss.profdata; bump it when a refreshed profile needs a newer LLVM.
 env:
   PGO_LLVM_VERSION: "23"
 
@@ -57,8 +56,8 @@ jobs:
           - platform: linux-x86_64
             runner: ubuntu-24.04
           # The two -pgo builds are the same programs compiled by clang against the repo's
-          # eglantine.profdata. Eden's profile (Eden-CI/PGO) comes from Switch 1 games: with it Mario
-          # Kart World ran at about half the speed of the normal build, with eglantine.profdata at
+          # edelweiss.profdata. Eden's profile (Eden-CI/PGO) comes from Switch 1 games: with it Mario
+          # Kart World ran at about half the speed of the normal build, with edelweiss.profdata at
           # about the same speed. Windows uses MSYS2's MinGW clang like Eden does; MSVC cannot read
           # an LLVM .profdata file.
           - platform: linux-x86_64-pgo
@@ -156,7 +155,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -s eglantine.profdata
+          test -s edelweiss.profdata
 
       - name: Set up MSVC
         if: matrix.platform == 'windows-x86_64'
@@ -257,7 +256,7 @@ jobs:
           )
           if [ '${{ matrix.pgo }}' = 'true' ]; then
             # Same flags Eden's CI passes for its clang PGO build.
-            profile="-fprofile-use=$PWD/eglantine.profdata -Wno-backend-plugin \
+            profile="-fprofile-use=$PWD/edelweiss.profdata -Wno-backend-plugin \
               -Wno-profile-instr-unprofiled -Wno-profile-instr-out-of-date"
             flags+=(
               "-DCMAKE_C_COMPILER=clang-$PGO_LLVM_VERSION"
@@ -315,7 +314,7 @@ jobs:
         shell: msys2 {0}
         run: |
           set -euo pipefail
-          profile="-fprofile-use=$(cygpath -m "$PWD/eglantine.profdata") -Wno-backend-plugin \
+          profile="-fprofile-use=$(cygpath -m "$PWD/edelweiss.profdata") -Wno-backend-plugin \
             -Wno-profile-instr-unprofiled -Wno-profile-instr-out-of-date"
           cmake -S . -B build/release -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
@@ -360,12 +359,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -x build/release/bin/eglantine
+          test -x build/release/bin/edelweiss
           test -x build/release/bin/eden-cli
-          strip build/release/bin/eglantine build/release/bin/eden-cli
-          tar -czf "eglantine-${GITHUB_SHA}-${{ matrix.platform }}.tar.gz" \
-            -C build/release/bin eglantine eden-cli
-          ls -la "eglantine-${GITHUB_SHA}-${{ matrix.platform }}.tar.gz"
+          strip build/release/bin/edelweiss build/release/bin/eden-cli
+          tar -czf "edelweiss-${GITHUB_SHA}-${{ matrix.platform }}.tar.gz" \
+            -C build/release/bin edelweiss eden-cli
+          ls -la "edelweiss-${GITHUB_SHA}-${{ matrix.platform }}.tar.gz"
 
       # A self-contained AppImage: linuxdeploy bundles every library the two programs need except
       # the base system ones (glibc, X11/Wayland client libraries, the GPU driver and Vulkan loader),
@@ -375,7 +374,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -x build/release/bin/eglantine
+          test -x build/release/bin/edelweiss
           test -x build/release/bin/eden-cli
           tools="$RUNNER_TEMP/linuxdeploy"
           mkdir -p "$tools"
@@ -385,9 +384,9 @@ jobs:
           curl -fsSL -o "$tools/linuxdeploy-plugin-qt-$arch.AppImage" \
           https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-$arch.AppImage
           chmod +x "$tools"/*.AppImage
-          # The desktop file names its icon dev.eglantine.eglantine.
-          icon="$RUNNER_TEMP/dev.eglantine.eglantine.png"
-          cp dist/Eglantine.png "$icon"
+          # The desktop file names its icon dev.edelweiss.edelweiss.
+          icon="$RUNNER_TEMP/dev.edelweiss.edelweiss.png"
+          cp dist/Edelweiss.png "$icon"
           export APPIMAGE_EXTRACT_AND_RUN=1
           export QMAKE="$QT_ROOT_DIR/bin/qmake"
           # Include Wayland platform plugins and their graphics/shell integrations.
@@ -395,11 +394,11 @@ jobs:
           export EXTRA_PLATFORM_PLUGINS='libqwayland-egl.so;libqwayland-generic.so'
           # Embedded in the AppImage metadata; matches the release tag (build-N) plus the commit.
           export LDAI_VERSION="build-${GITHUB_RUN_NUMBER}-${GITHUB_SHA::7}"
-          export LDAI_OUTPUT="eglantine-${GITHUB_SHA}-${{ matrix.platform }}.AppImage"
+          export LDAI_OUTPUT="edelweiss-${GITHUB_SHA}-${{ matrix.platform }}.AppImage"
           export OUTPUT="$LDAI_OUTPUT"
           export ARCH="$arch"
           "$tools/linuxdeploy-$arch.AppImage" --appdir AppDir \
-            --executable build/release/bin/eglantine \
+            --executable build/release/bin/edelweiss \
             --executable build/release/bin/eden-cli \
             --desktop-file dist/dev.eden_emu.eden.desktop \
             --icon-file "$icon" \
@@ -412,12 +411,12 @@ jobs:
         if: matrix.platform == 'windows-x86_64'
         shell: pwsh
         run: |
-          foreach ($exe in 'eglantine.exe', 'eden-cli.exe') {
+          foreach ($exe in 'edelweiss.exe', 'eden-cli.exe') {
             if (-not (Test-Path "build/release/bin/$exe")) {
               throw "build/release/bin/$exe was not produced"
             }
           }
-          windeployqt --release --no-translations build/release/bin/eglantine.exe
+          windeployqt --release --no-translations build/release/bin/edelweiss.exe
 
       # A dynamic MinGW build is not portable on its own: windeployqt6 brings the Qt libraries and
       # plugins, then every non-system DLL the binaries and those plugins pull in gets copied next to
@@ -429,10 +428,10 @@ jobs:
           set -euo pipefail
           export PATH="/ucrt64/bin:$PATH"
           cd build/release/bin
-          test -f eglantine.exe
+          test -f edelweiss.exe
           test -f eden-cli.exe
           windeployqt6 --no-translations --no-compiler-runtime --no-opengl-sw \
-            --no-system-dxc-compiler --no-system-d3d-compiler eglantine.exe
+            --no-system-dxc-compiler --no-system-d3d-compiler edelweiss.exe
           deps() {
             objdump -p "$1" | awk '/DLL Name:/ {print $3}' | while read -r dll; do
               [ -z "$dll" ] && continue
@@ -448,7 +447,7 @@ jobs:
               fi
             done
           }
-          for exe in eglantine.exe eden-cli.exe; do
+          for exe in edelweiss.exe eden-cli.exe; do
             deps "$exe"
           done
           find . -name '*.dll' | while read -r dll; do
@@ -463,8 +462,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          app=build/release/bin/eglantine.app
-          test -x "$app/Contents/MacOS/eglantine"
+          app=build/release/bin/edelweiss.app
+          test -x "$app/Contents/MacOS/edelweiss"
           test -x build/release/bin/eden-cli
           cp build/release/bin/eden-cli "$app/Contents/MacOS/eden-cli"
           "$(brew --prefix qt@6)/bin/macdeployqt" "$app" \
@@ -481,7 +480,7 @@ jobs:
               done
           done
           # Libraries that load their dependencies through @rpath find them in the bundle.
-          for program in eglantine eden-cli; do
+          for program in edelweiss eden-cli; do
             install_name_tool -add_rpath @executable_path/../Frameworks \
               "$app/Contents/MacOS/$program" 2> /dev/null
           done
@@ -498,21 +497,21 @@ jobs:
           # macdeployqt invalidates the signatures. The programs get the entitlements when the
           # tree has them (the Hypervisor CPU backend needs com.apple.security.hypervisor).
           codesign --force --deep --sign - "$app"
-          if [ -f dist/eglantine.entitlements ]; then
-            codesign --force --sign - --entitlements dist/eglantine.entitlements \
+          if [ -f dist/edelweiss.entitlements ]; then
+            codesign --force --sign - --entitlements dist/edelweiss.entitlements \
               "$app/Contents/MacOS/eden-cli"
-            codesign --force --sign - --entitlements dist/eglantine.entitlements "$app"
+            codesign --force --sign - --entitlements dist/edelweiss.entitlements "$app"
           fi
           codesign --verify --deep --strict "$app"
-          ditto -c -k --keepParent "$app" "eglantine-${GITHUB_SHA}-${{ matrix.platform }}.zip"
-          ls -la "eglantine-${GITHUB_SHA}-${{ matrix.platform }}.zip"
-          # Also ship a .dmg (drag eglantine.app onto Applications).
+          ditto -c -k --keepParent "$app" "edelweiss-${GITHUB_SHA}-${{ matrix.platform }}.zip"
+          ls -la "edelweiss-${GITHUB_SHA}-${{ matrix.platform }}.zip"
+          # Also ship a .dmg (drag edelweiss.app onto Applications).
           dmgdir=$(mktemp -d)
-          ditto "$app" "$dmgdir/eglantine.app"
+          ditto "$app" "$dmgdir/edelweiss.app"
           ln -s /Applications "$dmgdir/Applications"
-          hdiutil create -volname "Eglantine" -srcfolder "$dmgdir" -ov -format UDZO \
-            "eglantine-${GITHUB_SHA}-${{ matrix.platform }}.dmg"
-          ls -la "eglantine-${GITHUB_SHA}-${{ matrix.platform }}.dmg"
+          hdiutil create -volname "Edelweiss" -srcfolder "$dmgdir" -ov -format UDZO \
+            "edelweiss-${GITHUB_SHA}-${{ matrix.platform }}.dmg"
+          ls -la "edelweiss-${GITHUB_SHA}-${{ matrix.platform }}.dmg"
 
       # The artifact is the bin folder itself: GitHub zips artifacts on download, and uploading a
       # zip gave a zip inside a zip. The release job zips it once for the release.
@@ -520,7 +519,7 @@ jobs:
         if: matrix.platform == 'windows-x86_64'
         uses: actions/upload-artifact@v7
         with:
-          name: eglantine-${{ matrix.platform }}-${{ github.sha }}
+          name: edelweiss-${{ matrix.platform }}-${{ github.sha }}
           path: build/release/bin/
           if-no-files-found: error
           retention-days: 7
@@ -529,7 +528,7 @@ jobs:
         if: matrix.mingw
         uses: actions/upload-artifact@v7
         with:
-          name: eglantine-${{ matrix.platform }}-${{ github.sha }}
+          name: edelweiss-${{ matrix.platform }}-${{ github.sha }}
           path: build/release/bin/
           if-no-files-found: error
           retention-days: 7
@@ -539,10 +538,10 @@ jobs:
         if: startsWith(matrix.platform, 'linux')
         uses: actions/upload-artifact@v7
         with:
-          name: eglantine-${{ matrix.platform }}-${{ github.sha }}
+          name: edelweiss-${{ matrix.platform }}-${{ github.sha }}
           path: |
-            eglantine-${{ github.sha }}-${{ matrix.platform }}.tar.gz
-            eglantine-${{ github.sha }}-${{ matrix.platform }}.AppImage
+            edelweiss-${{ github.sha }}-${{ matrix.platform }}.tar.gz
+            edelweiss-${{ github.sha }}-${{ matrix.platform }}.AppImage
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
@@ -552,17 +551,16 @@ jobs:
         if: startsWith(matrix.platform, 'macos')
         uses: actions/upload-artifact@v7
         with:
-          name: eglantine-${{ matrix.platform }}-${{ github.sha }}
+          name: edelweiss-${{ matrix.platform }}-${{ github.sha }}
           path: |
-            eglantine-${{ github.sha }}-${{ matrix.platform }}.zip
-            eglantine-${{ github.sha }}-${{ matrix.platform }}.dmg
+            edelweiss-${{ github.sha }}-${{ matrix.platform }}.zip
+            edelweiss-${{ github.sha }}-${{ matrix.platform }}.dmg
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
 
-  # Publishes every binary as a GitHub pre-release once every platform built: on pushes to nx2
-  # and nx2-experimental, and on manual runs unless "Publish the binaries as a GitHub release" is
-  # unticked.
+  # Publishes every binary as a GitHub pre-release once every platform built: on pushes to edlws,
+  # and on manual runs unless "Publish the binaries as a GitHub release" is unticked.
   release:
     name: Publish release
     needs: build
@@ -574,7 +572,7 @@ jobs:
       - name: Download binaries
         uses: actions/download-artifact@v7
         with:
-          pattern: eglantine-*-${{ github.sha }}
+          pattern: edelweiss-*-${{ github.sha }}
           path: artifacts
 
       - name: Package release files
@@ -620,42 +618,30 @@ jobs:
 
           | Build Type | Standard | PGO (Recommended) | Notes |
           | --- | --- | --- | --- |
-          | amd64 | [AppImage](${base}/eglantine-linux-x86_64.AppImage) · [tar.gz](${base}/eglantine-linux-x86_64.tar.gz) | [AppImage](${base}/eglantine-linux-x86_64-pgo.AppImage) · [tar.gz](${base}/eglantine-linux-x86_64-pgo.tar.gz) | Make the AppImage executable (\`chmod +x\`) and run it |
-          | ARM (aarch64) | [AppImage](${base}/eglantine-linux-aarch64.AppImage) · [tar.gz](${base}/eglantine-linux-aarch64.tar.gz) | [AppImage](${base}/eglantine-linux-aarch64-pgo.AppImage) · [tar.gz](${base}/eglantine-linux-aarch64-pgo.tar.gz) | |
+          | amd64 | [AppImage](${base}/edelweiss-linux-x86_64.AppImage) · [tar.gz](${base}/edelweiss-linux-x86_64.tar.gz) | [AppImage](${base}/edelweiss-linux-x86_64-pgo.AppImage) · [tar.gz](${base}/edelweiss-linux-x86_64-pgo.tar.gz) | Make the AppImage executable (\`chmod +x\`) and run it |
+          | ARM (aarch64) | [AppImage](${base}/edelweiss-linux-aarch64.AppImage) · [tar.gz](${base}/edelweiss-linux-aarch64.tar.gz) | [AppImage](${base}/edelweiss-linux-aarch64-pgo.AppImage) · [tar.gz](${base}/edelweiss-linux-aarch64-pgo.tar.gz) | |
 
           ## Windows
 
-          Windows packages are in-place zip files: extract and run \`eglantine.exe\`, or \`eden-cli.exe\` from a terminal.
+          Windows packages are in-place zip files: extract and run \`edelweiss.exe\`, or \`eden-cli.exe\` from a terminal.
 
           | Build Type | Standard | PGO (Recommended) | Notes |
           | --- | --- | --- | --- |
-          | amd64 / x86_64 (MSVC) | [MSVC zip](${base}/eglantine-windows-x86_64.zip) | | Use if you run into graphical issues on other builds |
-          | amd64 / x86_64 (MinGW) | | [PGO zip](${base}/eglantine-windows-x86_64-pgo.zip) | Built with MinGW clang; bundles its own DLLs, no Visual C++ redistributable needed |
+          | amd64 / x86_64 (MSVC) | [MSVC zip](${base}/edelweiss-windows-x86_64.zip) | | Use if you run into graphical issues on other builds |
+          | amd64 / x86_64 (MinGW) | | [PGO zip](${base}/edelweiss-windows-x86_64-pgo.zip) | Built with MinGW clang; bundles its own DLLs, no Visual C++ redistributable needed |
 
           ## macOS
 
           | Build Type | Standard | PGO (Recommended) | Notes |
           | --- | --- | --- | --- |
-          | arm64 (Apple Silicon) | [zip](${base}/eglantine-macos-arm64.zip) | | macOS 15 or newer. Not notarized: right-click and choose Open the first time, or run \`xattr -dr com.apple.quarantine eglantine.app\`. \`eden-cli\` is inside the app, in \`Contents/MacOS\` |
+          | arm64 (Apple Silicon) | [zip](${base}/edelweiss-macos-arm64.zip) | | macOS 15 or newer. Not notarized: right-click and choose Open the first time, or run \`xattr -dr com.apple.quarantine edelweiss.app\`. \`eden-cli\` is inside the app, in \`Contents/MacOS\` |
 
-          The PGO builds are the same programs compiled with profile-guided optimization (clang plus Eglantine's profile); prefer them when your CPU supports it.
+          The PGO builds are the same programs compiled with profile-guided optimization (clang plus Edelweiss's profile); prefer them when your CPU supports it.
           EOF
 
           gh release create "${tag}" dist/* \
             --repo "${GITHUB_REPOSITORY}" \
             --target "${GITHUB_SHA}" \
             --prerelease \
-            --title "Eglantine ${GITHUB_REF_NAME} build ${GITHUB_RUN_NUMBER} (${GITHUB_SHA::7})" \
+            --title "Edelweiss ${GITHUB_REF_NAME} build ${GITHUB_RUN_NUMBER} (${GITHUB_SHA::7})" \
             --notes-file notes.md
-
-      - name: Ping Discord
-        shell: bash
-        env:
-          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
-        run: |
-          URL="https://github.com/${GITHUB_REPOSITORY}/releases/tag/build-${GITHUB_RUN_NUMBER}"
-          MSG=$(printf '## <@&1566184315178713190> Eglantine %s build %s (%s)\n%s' \
-            "$GITHUB_REF_NAME" "$GITHUB_RUN_NUMBER" "${GITHUB_SHA::7}" "$URL")
-          jq -n --arg content "$MSG" \
-            '{content: $content, allowed_mentions: {roles: ["1566184315178713190"]}}' \
-          | curl -fsS -H "Content-Type: application/json" -d @- "$WEBHOOK"

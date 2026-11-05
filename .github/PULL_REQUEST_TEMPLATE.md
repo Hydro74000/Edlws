@@ -1,6 +1,6 @@
-- [ ] I have read and followed the [Contribution Guidelines](https://github.com/Djihads80/Eglantine/blob/nx2/CONTRIBUTING.md#code-contributions).
-- [ ] I have read and followed the [AI Policy](https://github.com/Djihads80/Eglantine/blob/nx2/docs/policies/AI.md).
-- [ ] I have read and followed the [Coding Guidelines](https://github.com/Djihads80/Eglantine/blob/nx2/docs/policies/Coding.md) to the best of my ability.
+- [ ] I have read and followed the [Contribution Guidelines](https://github.com/Hydro74000/Edlws/blob/edlws/CONTRIBUTING.md#code-contributions).
+- [ ] I have read and followed the [AI Policy](https://github.com/Hydro74000/Edlws/blob/edlws/docs/policies/AI.md).
+- [ ] I have read and followed the [Coding Guidelines](https://github.com/Hydro74000/Edlws/blob/edlws/docs/policies/Coding.md) to the best of my ability.
 - [ ] **I have put [HUMANMADE] in the title if the pr was human-mande**
 
 ---

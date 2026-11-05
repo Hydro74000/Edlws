@@ -1,8 +1,7 @@
 # Arch Linux development package
 
-This directory contains a draft `eglantine-git` PKGBUILD for the open Linux
-packaging request in [issue #167](https://github.com/Djihads80/Eglantine/issues/167).
-It builds the `nx2` branch from source against Arch's system Qt, SDL3 and FFmpeg.
+This directory contains a draft `edelweiss-git` PKGBUILD.
+It builds the `edlws` branch from source against Arch's system Qt, SDL3 and FFmpeg.
 That avoids shipping Ubuntu-linked binaries to a rolling-release distribution
 and gives the Qt frontend access to the host's platform plugins, including
 Wayland when `qt6-wayland` is installed.

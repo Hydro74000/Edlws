@@ -21,7 +21,7 @@ void Check(bool condition,
 int main() {
   const auto temp = fs::temp_directory_path();
   const auto root =
-      temp / ("eglantine-discovery-" +
+      temp / ("edelweiss-discovery-" +
               std::to_string(
                   std::chrono::steady_clock::now().time_since_epoch().count()));
   Check(fs::equivalent(root.parent_path(), temp) && fs::create_directory(root));

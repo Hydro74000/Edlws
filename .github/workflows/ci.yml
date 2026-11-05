@@ -1,0 +1,138 @@
+name: ci
+
+# Builds Edelweiss with its tests and runs them. release-binaries builds the packages without
+# tests; this is what checks a change, on the platforms that have no local bench here too.
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - edlws
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - ".github/ISSUE_TEMPLATE/**"
+  pull_request:
+    branches:
+      - edlws
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - ".github/ISSUE_TEMPLATE/**"
+
+permissions:
+  contents: read
+
+# A newer push makes the checks of the last one pointless.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.platform }} tests
+    runs-on: ${{ matrix.runner }}
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 3000M
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            runner: ubuntu-24.04
+          - platform: macos-arm64
+            runner: macos-15
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            autoconf cmake g++ gcc git glslang-tools libglu1-mesa-dev \
+            libpulse-dev libtool libudev-dev libxkbcommon-x11-0 \
+            mesa-common-dev nasm ninja-build qt6-base-private-dev \
+            qt6-charts-dev qt6-tools-dev libavfilter-dev libavcodec-dev \
+            libswscale-dev pkg-config zlib1g-dev libva-dev libvdpau-dev \
+            spirv-tools spirv-headers libusb-1.0-0-dev \
+            libboost-dev libboost-fiber-dev libboost-context-dev \
+            libopus-dev libasound2-dev ccache
+
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          HOMEBREW_NO_INSTALL_CLEANUP: 1
+        run: |
+          brew install autoconf automake boost ffmpeg fmt glslang hidapi libtool libusb lz4 ninja \
+            nlohmann-json openssl pkg-config qt@6 sdl3 speexdsp zlib zstd cmake catch2 molten-vk \
+            vulkan-loader spirv-tools vulkan-utility-libraries ccache
+
+      - name: Install Qt on Linux
+        if: runner.os == 'Linux'
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.8.3"
+          host: linux
+          target: desktop
+          arch: linux_gcc_64
+          modules: qtcharts
+          cache: true
+
+      - name: Cache CPM downloads
+        uses: actions/cache@v5
+        with:
+          path: .cache/cpm
+          key: cpm-${{ runner.os }}-${{ hashFiles('cpmfile.json', 'CMakeLists.txt', 'src/**/CMakeLists.txt', 'CMakeModules/**') }}
+          restore-keys: |
+            cpm-${{ runner.os }}-
+
+      - name: Cache compiler objects
+        uses: actions/cache@v5
+        with:
+          path: .ccache
+          key: ci-objects-${{ matrix.platform }}-${{ github.sha }}
+          restore-keys: |
+            ci-objects-${{ matrix.platform }}-
+
+      - name: Configure
+        shell: bash
+        run: |
+          set -euo pipefail
+          flags=(
+            -DCMAKE_BUILD_TYPE=Release
+            -DBUILD_TESTING=ON
+            -DYUZU_TESTS=ON
+            -DYUZU_CMD=ON
+            -DYUZU_ROOM=OFF
+            -DYUZU_ROOM_STANDALONE=OFF
+            -DYUZU_USE_BUNDLED_QT=OFF
+            -DVulkanHeaders_FORCE_BUNDLED=ON
+            -DVulkanUtilityLibraries_FORCE_BUNDLED=ON
+            -DENABLE_UPDATE_CHECKER=OFF
+            -DUSE_DISCORD_PRESENCE=OFF
+            -DUSE_CCACHE=ON
+          )
+          if [ "$RUNNER_OS" = macOS ]; then
+            flags+=(
+              "-DCMAKE_PREFIX_PATH=$(brew --prefix qt@6);$(brew --prefix zlib)"
+              "-DOPENSSL_ROOT_DIR=$(brew --prefix openssl@3)"
+            )
+          else
+            flags+=("-DCMAKE_PREFIX_PATH=$QT_ROOT_DIR" -DYUZU_USE_BUNDLED_SDL3=ON)
+          fi
+          cmake -S . -B build/ci -G Ninja "${flags[@]}"
+
+      - name: Build
+        shell: bash
+        run: |
+          cmake --build build/ci --target yuzu-cmd tests --parallel
+          ccache --show-stats
+
+      - name: Run the tests
+        shell: bash
+        run: build/ci/bin/tests

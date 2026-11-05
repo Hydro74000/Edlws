@@ -1299,7 +1299,7 @@ void MainWindow::InitializeHotkeys() {
     hotkey_registry.LoadHotkeys();
 
     LinkActionShortcut(ui->action_Load_File, QStringLiteral("Load File"));
-    LinkActionShortcut(ui->action_Exit, QStringLiteral("Exit Eglantine"));
+    LinkActionShortcut(ui->action_Exit, QStringLiteral("Exit Edelweiss"));
     LinkActionShortcut(ui->action_Restart, QStringLiteral("Restart Emulation"));
     LinkActionShortcut(ui->action_Pause, QStringLiteral("Continue/Pause Emulation"));
     LinkActionShortcut(ui->action_Stop, QStringLiteral("Stop Emulation"));
@@ -1935,7 +1935,7 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
     if (close_pending) {
         return;
     }
-    LOG_INFO(Frontend, "Eglantine starting...");
+    LOG_INFO(Frontend, "Edelweiss starting...");
 
     if (params.program_id == 0 ||
         params.program_id > static_cast<u64>(Service::AM::AppletProgramId::MaxProgramId)) {
@@ -1978,7 +1978,7 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
                    "Vulkan, 1x resolution, GPU Fast, asynchronous shaders, BC3, conservative VRAM, "
                    "reactive flushing off, FIFO Relaxed VSync, handheld mode, ScaleForce, and "
                    "FXAA.\n\n"
-                   "They apply to Mario Kart World until Eglantine is closed. Your saved settings "
+                   "They apply to Mario Kart World until Edelweiss is closed. Your saved settings "
                    "are not changed."),
                 QMessageBox::Yes | QMessageBox::No, QMessageBox::No) == QMessageBox::Yes;
         LOG_INFO(Config, "MKW recommended settings accepted: {}", use_recommended_mkw_settings);
@@ -4899,7 +4899,7 @@ void MainWindow::OnCheckGraphicsBackend() {
         UISettings::values.gui_force_x11.SetValue(true);
         GraphicsBackend::SetForceX11(true);
         QMessageBox::information(this, tr("Restart Required"),
-                                 tr("Restart Eglantine to apply the X11 backend."));
+                                 tr("Restart Edelweiss to apply the X11 backend."));
     }
 }
 #endif
@@ -5018,8 +5018,8 @@ bool MainWindow::ConfirmClose() {
         UISettings::values.confirm_before_stopping.GetValue() == ConfirmStop::Ask_Based_On_Game)
         return true;
 
-    const auto text = tr("Are you sure you want to close Eglantine?");
-    return question(this, tr("Eglantine"), text);
+    const auto text = tr("Are you sure you want to close Edelweiss?");
+    return question(this, tr("Edelweiss"), text);
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
@@ -5125,7 +5125,7 @@ bool MainWindow::ConfirmChangeGame() {
 
     // Use custom question to link controller navigation
     return question(
-        this, tr("Eglantine"),
+        this, tr("Edelweiss"),
         tr("Are you sure you want to stop the emulation? Any unsaved progress will be lost."),
         QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
 }
@@ -5134,10 +5134,10 @@ bool MainWindow::ConfirmForceLockedExit() {
     if (QtCommon::emu_thread == nullptr)
         return true;
 
-    const auto text = tr("The currently running application has requested Eglantine to not exit.\n\n"
+    const auto text = tr("The currently running application has requested Edelweiss to not exit.\n\n"
                          "Would you like to bypass this and exit anyway?");
 
-    return question(this, tr("Eglantine"), text);
+    return question(this, tr("Edelweiss"), text);
 }
 
 void MainWindow::RequestGameExit() {
