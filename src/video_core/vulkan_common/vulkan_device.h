@@ -347,6 +347,21 @@ public:
         return IsSparseBindingSupported() && features.features.sparseResidencyImage2D;
     }
 
+    /// Images whose memory can be bound in parts, on the graphics queue.
+    bool IsSparseResidencyImageSupported(VkImageType type) const {
+        if (!IsSparseBindingSupported()) {
+            return false;
+        }
+        switch (type) {
+        case VK_IMAGE_TYPE_2D:
+            return features.features.sparseResidencyImage2D;
+        case VK_IMAGE_TYPE_3D:
+            return features.features.sparseResidencyImage3D;
+        default:
+            return false;
+        }
+    }
+
     /// Whether a sparse image may bind the same memory to several of its blocks.
     bool IsSparseResidencyAliasedSupported() const {
         return IsSparseResidencyImage2DSupported() && features.features.sparseResidencyAliased;
