@@ -487,6 +487,9 @@ void Scheduler::EndRenderPass()
             return;
         }
 
+        fragment_barrier_pending = false;
+        render_pass_has_stores = false;
+
         query_cache->CounterClose(VideoCommon::QueryType::StreamingByteCount);
 
         // Log render pass end

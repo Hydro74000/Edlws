@@ -94,6 +94,24 @@ public:
     void RequestOutsideRenderPassOperationContext();
 
     /// Returns true when a render pass is currently active in the scheduler state.
+    /// On tile-based GPUs, ending a render pass for a barrier is costly: a draw takes the
+    /// deferred one only if it can see what the render pass wrote (GraphicsPipeline::ConfigureDraw).
+    void DeferFragmentBarrier() {
+        fragment_barrier_pending = state.renderpass != VK_NULL_HANDLE;
+    }
+
+    bool TakeFragmentBarrier() {
+        return std::exchange(fragment_barrier_pending, false);
+    }
+
+    void NoteRenderPassStores() {
+        render_pass_has_stores = true;
+    }
+
+    bool RenderPassHasStores() const {
+        return render_pass_has_stores;
+    }
+
     bool IsRenderPassActive() const {
         return state.renderpass != VK_NULL_HANDLE;
     }
@@ -216,6 +234,8 @@ public:
 private:
     std::chrono::steady_clock::time_point last_flush{};
     bool flush_pending{};
+    bool fragment_barrier_pending{};
+    bool render_pass_has_stores{};
 
     class Command {
     public:
