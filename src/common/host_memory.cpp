@@ -809,8 +809,13 @@ void HostMemory::HintCold(size_t physical_offset, size_t length,
     }
     const auto hint = [length](u8* address) {
 #ifdef _WIN32
-        // Unlocking pages that are not locked takes them out of the working set.
-        VirtualUnlock(address, length);
+        // Unlocking pages that are not locked takes them out of the working set, at once: every
+        // use of them then faults. Only when the system needs the RAM (no MADV_COLD here).
+        MEMORYSTATUSEX status{};
+        status.dwLength = sizeof(status);
+        if (GlobalMemoryStatusEx(&status) && status.dwMemoryLoad >= 85) {
+            VirtualUnlock(address, length);
+        }
 #elif defined(__linux__) && defined(MADV_COLD)
         // Not MADV_PAGEOUT: it reclaims the range now, with the address space lock held, and every
         // thread of the process that faults or maps memory stalls behind it (~200 ms, gigabytes).
