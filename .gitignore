@@ -70,13 +70,13 @@ externals/generated
 
 # Qt resources compiled for PySide, generated from the .qrc files
 *_rc.py
+*_ui.py
 
 # Plans and audits
 plan_*.md
 audit_*.md
 
 # Local agent instructions and tooling
-AGENTS.md
 .claude/settings.local.json
 CLAUDE.local.md
 
