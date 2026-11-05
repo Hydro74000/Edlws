@@ -109,6 +109,14 @@ struct Runtime {
                         copy.size);
         }
     }
+    void CopyBuffer(Buffer& dst, Buffer& src, std::span<const VideoCommon::BufferCopy> copies, bool,
+                    bool = false) {
+        CopyBuffer(dst, &src, copies, true);
+    }
+    void ClearBuffer(Buffer& dst, u32 offset, size_t size, u32 value) {
+        REQUIRE(offset + size <= dst.bytes.size());
+        std::memset(dst.bytes.data() + offset, static_cast<u8>(value), size);
+    }
     void Finish() {
         for (auto& copy : pending) {
             copy();

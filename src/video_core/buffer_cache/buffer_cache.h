@@ -208,6 +208,15 @@ void BufferCache<P>::WriteMemory(DAddr device_addr, u64 size, bool keep_page_gpu
     const DAddr page_end = Common::AlignUp(device_addr + size, DEVICE_PAGESIZE);
     if (keep_page_gpu_data && VideoCommon::GpuSplit::OwnsScheduler() &&
         gpu_modified_ranges.Intersects(page_begin, page_end - page_begin)) {
+        // Where buffer downloads are synchronous (native titles), upload the CPU's bytes into the
+        // buffer instead, as CachedWriteMemory does: the page stays GPU-owned with the GPU's bytes
+        // next to the write, and nothing waits for the host GPU.
+        if (!AsyncBufferDownloads() && IsRegionRegistered(device_addr, size)) {
+            tmp_buffer.resize_destructive(size);
+            device_memory.ReadBlockUnsafe(device_addr, tmp_buffer.data(), size);
+            InlineMemoryImplementation(device_addr, size, tmp_buffer);
+            return;
+        }
         DownloadMemory(page_begin, page_end - page_begin);
     }
     memory_tracker.MarkRegionAsCpuModified(device_addr, size);
