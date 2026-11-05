@@ -276,6 +276,35 @@ void TextureCache<P>::ApplyThresholdOverrides(bool log) {
 }
 
 template <class P>
+void TextureCache<P>::FreeSentencedImages() {
+    if constexpr (requires { runtime.CurrentTick(); }) {
+        while (!gpu_sentenced_images.empty() &&
+               runtime.IsFree(gpu_sentenced_images.front().tick)) {
+            gpu_sentenced_bytes -= gpu_sentenced_images.front().bytes;
+            gpu_sentenced_images.pop_front();
+        }
+    }
+}
+
+template <class P>
+void TextureCache<P>::CollectDuringFrame() {
+    // Loading a world, title 1 creates ~4.6 GB of images in one frame of 5 to 10 s. TickFrame
+    // doesn't run meanwhile, so the images of the last world stay while the new ones arrive:
+    // an integrated GPU then fills the RAM (GTT 2 -> 6.8 GB), and each allocation compresses guest
+    // memory into swap on the GPU thread. Only called with no image held: images in use this
+    // frame or the last few are too recent for the collector.
+    constexpr u64 CollectStep = 128_MiB;
+    if (bytes_created_this_frame < CollectStep) {
+        return;
+    }
+    bytes_created_this_frame = 0;
+    FreeSentencedImages();
+    if (total_used_memory >= expected_memory) {
+        RunGarbageCollector();
+    }
+}
+
+template <class P>
 void TextureCache<P>::TickFrame() {
     // Upload buffers grown for one huge image (title 1's 341 MiB terrain layer pools) are freed
     // rather than kept for the rest of the session.
@@ -362,13 +391,8 @@ void TextureCache<P>::TickFrame() {
             }
         }
     }
-    if constexpr (requires { runtime.CurrentTick(); }) {
-        while (!gpu_sentenced_images.empty() &&
-               runtime.IsFree(gpu_sentenced_images.front().tick)) {
-            gpu_sentenced_bytes -= gpu_sentenced_images.front().bytes;
-            gpu_sentenced_images.pop_front();
-        }
-    }
+    bytes_created_this_frame = 0;
+    FreeSentencedImages();
     // If we can obtain the memory info, use it instead of the estimate.
     if (runtime.CanReportMemoryUsage()) {
         total_used_memory = runtime.GetDeviceMemoryUsage();
@@ -3136,6 +3160,7 @@ void TextureCache<P>::RegisterImage(ImageId image_id) {
                "Trying to register an already registered image");
     image.flags |= ImageFlagBits::Registered;
     total_used_memory += ImageMemoryBytes(slot_images[image_id]);
+    bytes_created_this_frame += ImageMemoryBytes(slot_images[image_id]);
     image.lru_index = lru_cache.Insert(image_id, frame_tick);
 
     ForEachGPUPage(image.gpu_addr, image.guest_size_bytes, [this, image_id](u64 page) {

@@ -388,6 +388,7 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {
         return;
     }
     std::scoped_lock lock{buffer_cache.mutex, texture_cache.mutex};
+    texture_cache.CollectDuringFrame();
     // update engine as channel may be different.
     pipeline->SetEngine(maxwell3d, gpu_memory);
     const u32 repack_dirty = buffer_cache_runtime.SetVertexRepackLayout(
@@ -1032,6 +1033,7 @@ void RasterizerVulkan::DispatchCompute() {
         return;
     }
     std::scoped_lock lock{texture_cache.mutex, buffer_cache.mutex};
+    texture_cache.CollectDuringFrame();
     // Command list pages the dispatch writes are copied for the split's front right after it.
     buffer_cache.Nx2CollectListCopies(true);
     SCOPE_EXIT {

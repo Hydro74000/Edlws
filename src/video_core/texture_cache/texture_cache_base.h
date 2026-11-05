@@ -222,6 +222,9 @@ public:
     /// Notify the cache that a new frame has been queued
     void TickFrame();
 
+    /// Between draws and dispatches: makes room in a frame that creates gigabytes of images.
+    void CollectDuringFrame();
+
     /// Return a constant reference to the given image view id
     [[nodiscard]] const ImageView& GetImageView(ImageViewId id) const noexcept;
 
@@ -379,6 +382,7 @@ private:
 
     /// Runs the Garbage Collector.
     void RunGarbageCollector();
+    void FreeSentencedImages();
 
     /// Find or create an image view in the guest descriptor table
     ImageViewId VisitImageView(u32 index, bool compute);
@@ -606,6 +610,7 @@ private:
         u64 bytes;
         Image image;
     };
+    u64 bytes_created_this_frame{};
     std::deque<GpuSentencedImage> gpu_sentenced_images;
     u64 gpu_sentenced_bytes{};
 
