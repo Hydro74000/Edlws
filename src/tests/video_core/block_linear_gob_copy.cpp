@@ -48,3 +48,29 @@ TEST_CASE("CopyBlockLinearGobs: same bytes as unswizzling and swizzling", "[vide
     CheckGobCopy(8, 32, 16, 1, 0);
     CheckGobCopy(1, 64, 8, 0, 0);
 }
+
+TEST_CASE("UnswizzleTexture: large surfaces, split among the workers", "[video_core]") {
+    constexpr u32 BytesPerPixel = 4;
+    constexpr u32 Width = 2048;
+    constexpr u32 Height = 2048;
+    constexpr u32 BlockHeight = 4;
+    const size_t size =
+        Tegra::Texture::CalculateSize(true, BytesPerPixel, Width, Height, 1, BlockHeight, 0);
+    std::vector<u8> tiled(size);
+    u32 state = 0x9abcdef0;
+    for (auto& byte : tiled) {
+        state = state * 1664525 + 1013904223;
+        byte = static_cast<u8>(state >> 24);
+    }
+    std::vector<u8> expected(size_t{Width} * Height * BytesPerPixel);
+    Tegra::Texture::UnswizzleSubrect(expected, tiled, BytesPerPixel, Width, Height, 1, 0, 0, Width,
+                                     Height, BlockHeight, 0, Width * BytesPerPixel);
+    std::vector<u8> linear(expected.size());
+    Tegra::Texture::UnswizzleTexture(linear, tiled, BytesPerPixel, Width, Height, 1, BlockHeight, 0,
+                                     0);
+    REQUIRE(linear == expected);
+    std::vector<u8> again(size);
+    Tegra::Texture::SwizzleTexture(again, linear, BytesPerPixel, Width, Height, 1, BlockHeight, 0,
+                                   0);
+    REQUIRE(again == tiled);
+}

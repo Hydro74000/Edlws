@@ -5,8 +5,10 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstring>
+#include <memory>
 #include <span>
 
 #include "common/alignment.h"
@@ -15,6 +17,7 @@
 #include "common/div_ceil.h"
 #include "video_core/gpu.h"
 #include "video_core/textures/decoders.h"
+#include "video_core/textures/workers.h"
 
 namespace Tegra::Texture {
 namespace {
@@ -43,7 +46,8 @@ void incrpdep(u32& value) {
 
 template <bool TO_LINEAR, u32 BYTES_PER_PIXEL>
 void SwizzleImpl(std::span<u8> output, std::span<const u8> input, u32 width, u32 height, u32 depth,
-                 u32 block_height, u32 block_depth, u32 stride, bool native_tiling) {
+                 u32 block_height, u32 block_depth, u32 stride, bool native_tiling, u32 first_line,
+                 u32 last_line) {
     // The origin of the transformation can be configured here, leave it as zero as the current API
     // doesn't expose it.
     static constexpr u32 origin_x = 0;
@@ -67,7 +71,7 @@ void SwizzleImpl(std::span<u8> output, std::span<const u8> input, u32 width, u32
         const u32 z = slice + origin_z;
         const u32 offset_z = (z >> block_depth) * slice_size +
                              ((z & block_depth_mask) << (GOB_SIZE_SHIFT + block_height));
-        for (u32 line = 0; line < height; ++line) {
+        for (u32 line = first_line; line < last_line; ++line) {
             const u32 y = line + origin_y;
             const u32 swizzled_y = pdep<SWIZZLE_Y_BITS>(y);
 
@@ -159,14 +163,47 @@ void SwizzleSubrectImpl(std::span<u8> output, std::span<const u8> input, u32 wid
     }
 }
 
+// Calls func(first_line, last_line) over ranges of lines from the texture workers and this thread.
+// Workers busy with other images only leave it more ranges to do itself.
+template <typename Func>
+void ForLineRanges(u32 height, const Func& func) {
+    struct Progress {
+        std::atomic<u32> next{};
+        std::atomic<u32> done{};
+    };
+    const u32 helpers = GetThreadWorkerCount();
+    const u32 ranges = (std::min)((helpers + 1) * 2, height);
+    auto progress = std::make_shared<Progress>();
+    const auto work = [progress, ranges, height, &func] {
+        for (u32 range; (range = progress->next.fetch_add(1)) < ranges;) {
+            const u32 first_line = static_cast<u32>(u64{height} * range / ranges);
+            const u32 last_line = static_cast<u32>(u64{height} * (range + 1) / ranges);
+            func(first_line, last_line);
+            if (progress->done.fetch_add(1, std::memory_order_acq_rel) + 1 == ranges) {
+                progress->done.notify_all();
+            }
+        }
+    };
+    auto& workers = GetThreadWorkers();
+    for (u32 helper = 0; helper < helpers; ++helper) {
+        workers.QueueWork(work);
+    }
+    work();
+    for (u32 done; (done = progress->done.load(std::memory_order_acquire)) != ranges;) {
+        progress->done.wait(done, std::memory_order_acquire);
+    }
+}
+
 template <bool TO_LINEAR>
-void Swizzle(std::span<u8> output, std::span<const u8> input, u32 bytes_per_pixel, u32 width,
-             u32 height, u32 depth, u32 block_height, u32 block_depth, u32 stride_alignment, bool native_tiling) {
+void SwizzleLines(std::span<u8> output, std::span<const u8> input, u32 bytes_per_pixel, u32 width,
+                  u32 height, u32 depth, u32 block_height, u32 block_depth, u32 stride_alignment,
+                  bool native_tiling, u32 first_line, u32 last_line) {
     switch (bytes_per_pixel) {
 #define BPP_CASE(x)                                                                                \
     case x:                                                                                        \
         return SwizzleImpl<TO_LINEAR, x>(output, input, width, height, depth, block_height,        \
-                                         block_depth, stride_alignment, native_tiling);
+                                         block_depth, stride_alignment, native_tiling, first_line, \
+                                         last_line);
         BPP_CASE(1)
         BPP_CASE(2)
         BPP_CASE(3)
@@ -179,6 +216,25 @@ void Swizzle(std::span<u8> output, std::span<const u8> input, u32 bytes_per_pixe
     default:
         ASSERT_MSG(false, "Invalid bytes_per_pixel={}", bytes_per_pixel);
         break;
+    }
+}
+
+template <bool TO_LINEAR>
+void Swizzle(std::span<u8> output, std::span<const u8> input, u32 bytes_per_pixel, u32 width,
+             u32 height, u32 depth, u32 block_height, u32 block_depth, u32 stride_alignment,
+             bool native_tiling) {
+    // Below this the workers cost more than they save. Above, a 682 MiB upload took 106 ms of the
+    // GPU thread on a fast CPU, and seconds with the frames behind it on a slow one.
+    constexpr u64 ParallelMinBytes = 8ULL << 20;
+    const auto lines = [&](u32 first_line, u32 last_line) {
+        SwizzleLines<TO_LINEAR>(output, input, bytes_per_pixel, width, height, depth, block_height,
+                                block_depth, stride_alignment, native_tiling, first_line,
+                                last_line);
+    };
+    if (u64{width} * bytes_per_pixel * height * depth < ParallelMinBytes) {
+        lines(0, height);
+    } else {
+        ForLineRanges(height, lines);
     }
 }
 

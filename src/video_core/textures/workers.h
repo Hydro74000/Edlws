@@ -9,4 +9,6 @@ namespace Tegra::Texture {
 
 Common::ThreadWorker& GetThreadWorkers();
 
+/// How many threads GetThreadWorkers has.
+u32 GetThreadWorkerCount();
 }

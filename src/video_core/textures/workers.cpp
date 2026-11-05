@@ -10,17 +10,22 @@
 
 namespace Tegra::Texture {
 
-Common::ThreadWorker& GetThreadWorkers() {
+u32 GetThreadWorkerCount() {
     // A quarter of the hardware threads (at least 2). Half took ~3.5 cores from the emulated
     // CPU cores and the GPU thread on an 8-core laptop when textures were thrashing; with an
     // eighth (2) both threads stayed saturated and streamed textures arrived seconds late (shown
     // as placeholders), while 4 cost no frame rate. EDEN_NX2_TRANSCODE_THREADS=<n> overrides.
-    static Common::ThreadWorker workers{[] {
+    static const u32 count = [] {
         if (const char* text = std::getenv("EDEN_NX2_TRANSCODE_THREADS")) {
             return (std::max)(static_cast<u32>(std::strtoul(text, nullptr, 10)), 1U);
         }
         return (std::max)(std::thread::hardware_concurrency() / 4, 2U);
-    }(), "ImageTranscode"};
+    }();
+    return count;
+}
+
+Common::ThreadWorker& GetThreadWorkers() {
+    static Common::ThreadWorker workers{GetThreadWorkerCount(), "ImageTranscode"};
     return workers;
 }
 
