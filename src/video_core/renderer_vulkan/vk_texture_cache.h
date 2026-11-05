@@ -83,6 +83,8 @@ public:
 
     u64 GetDeviceMemoryBudget() const;
 
+    std::optional<s64> SystemMemoryHeadroom() const;
+
     u64 GetDeviceMemorySlack() const;
 
     bool CanReportMemoryUsage() const;

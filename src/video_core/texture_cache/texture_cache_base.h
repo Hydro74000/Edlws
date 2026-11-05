@@ -151,6 +151,8 @@ class TextureCache : public VideoCommon::ChannelSetupCaches<TextureCacheChannelI
     /// The most device memory the collector lets the cache fill before it collects in earnest,
     /// on every GPU (ApplyThresholdOverrides).
     static constexpr u64 MaxCriticalMemory = 5_GiB;
+    /// The lowest LimitBySystemMemory takes the thresholds to: under it, frames evict each other.
+    static constexpr u64 MinLimitedCriticalMemory = 3_GiB;
     static constexpr size_t GC_EMERGENCY_COUNTS = 2;
 
     using Runtime = typename P::Runtime;
@@ -384,6 +386,9 @@ private:
     void RunGarbageCollector();
     void FreeSentencedImages();
 
+    /// Keeps the thresholds of a GPU sharing the RAM under what leaves the system its part.
+    void LimitBySystemMemory();
+
     /// Find or create an image view in the guest descriptor table
     ImageViewId VisitImageView(u32 index, bool compute);
 
@@ -613,6 +618,7 @@ private:
     u64 bytes_created_this_frame{};
     std::deque<GpuSentencedImage> gpu_sentenced_images;
     u64 gpu_sentenced_bytes{};
+    bool limited_by_system_memory{};
 
     /// Bytes of images per device memory block, for the collector (refreshed every 60 frames).
     std::unordered_map<u64, u64> block_image_bytes;

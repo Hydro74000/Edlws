@@ -18,4 +18,10 @@ struct MemoryInfo {
  */
 [[nodiscard]] const MemoryInfo& GetMemInfo();
 
+/**
+ * Gets the memory the system can give out now without swapping
+ * @return The size in bytes, or 0 where it isn't known
+ */
+[[nodiscard]] u64 GetAvailablePhysicalMemory();
+
 } // namespace Common

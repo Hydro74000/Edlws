@@ -1038,6 +1038,10 @@ FN_MAX_LIMIT_LIST
     /// subtracted: see GetDeviceMemorySlack().
     u64 GetDeviceMemoryBudget() const;
 
+    /// On an integrated GPU, the RAM free over the part left to the system (15% of it), negative
+    /// under that part. Nothing on other GPUs, or where the system doesn't tell.
+    std::optional<s64> SystemMemoryHeadroom() const;
+
     /// Memory the allocator holds from the driver in the main device-local heap but has no
     /// allocation in (the unused part of its blocks). GetDeviceMemoryUsage() does not count it,
     /// yet the driver does: with the heap at its budget it is not available to new images.

@@ -10,7 +10,12 @@
 #include <sys/types.h>
 #if defined(__APPLE__) || defined(__FreeBSD__)
 #include <sys/sysctl.h>
+#if defined(__APPLE__)
+#include <mach/mach.h>
+#include <unistd.h>
+#endif
 #elif defined(__linux__)
+#include <cstdio>
 #include <sys/sysinfo.h>
 #else
 #include <unistd.h>
@@ -67,6 +72,39 @@ static MemoryInfo Detect() {
 const MemoryInfo& GetMemInfo() {
     static MemoryInfo mem_info = Detect();
     return mem_info;
+}
+
+u64 GetAvailablePhysicalMemory() {
+#ifdef _WIN32
+    MEMORYSTATUSEX memorystatus;
+    memorystatus.dwLength = sizeof(memorystatus);
+    return GlobalMemoryStatusEx(&memorystatus) ? memorystatus.ullAvailPhys : 0;
+#elif defined(__APPLE__)
+    vm_statistics64_data_t stats;
+    mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
+    if (host_statistics64(mach_host_self(), HOST_VM_INFO64,
+                          reinterpret_cast<host_info64_t>(&stats), &count) != KERN_SUCCESS) {
+        return 0;
+    }
+    const u64 pages = u64{stats.free_count} + stats.inactive_count + stats.purgeable_count;
+    return pages * static_cast<u64>(sysconf(_SC_PAGESIZE));
+#elif defined(__linux__) && !defined(__ANDROID__)
+    std::FILE* const file = std::fopen("/proc/meminfo", "r");
+    if (file == nullptr) {
+        return 0;
+    }
+    char line[128];
+    unsigned long long kib = 0;
+    while (std::fgets(line, sizeof(line), file) != nullptr) {
+        if (std::sscanf(line, "MemAvailable: %llu kB", &kib) == 1) {
+            break;
+        }
+    }
+    std::fclose(file);
+    return u64{kib} * 1024;
+#else
+    return 0;
+#endif
 }
 
 } // namespace Common

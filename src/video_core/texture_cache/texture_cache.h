@@ -145,6 +145,10 @@ void TextureCache<P>::RunGarbageCollector() {
         }();
         ticks_to_destroy = (std::max)(ticks_to_destroy, min_age);
         num_iterations = aggressive_mode ? 40 : (high_priority_mode ? 20 : 10);
+        if (aggressive_mode && limited_by_system_memory) {
+            // A world loading creates far more than 40 images a frame, while free RAM runs out.
+            num_iterations = std::clamp<u64>((total_used_memory - critical_memory) / 1_MiB, 40, 400);
+        }
     };
     const auto Cleanup = [this, &num_iterations, &high_priority_mode, &aggressive_mode,
                           &evict_old_costly](ImageId image_id) {
@@ -257,7 +261,14 @@ void TextureCache<P>::ApplyThresholdOverrides(bool log) {
     // On every GPU: past what a frame needs, more device memory only keeps the textures of earlier
     // scenes (title 1 filled 6.7 GB of an 8 GB card and draws its races in ~5 GB), so collect from
     // MaxCriticalMemory on rather than near the card's budget.
-    critical_memory = (std::min)(critical_memory, MaxCriticalMemory);
+    // A GPU sharing the RAM goes by free RAM instead (LimitBySystemMemory).
+    bool follows_free_memory = false;
+    if constexpr (requires { runtime.SystemMemoryHeadroom(); }) {
+        follows_free_memory = runtime.SystemMemoryHeadroom().has_value();
+    }
+    if (!follows_free_memory) {
+        critical_memory = (std::min)(critical_memory, MaxCriticalMemory);
+    }
     expected_memory =
         (std::min)(expected_memory, critical_memory - (std::min)(critical_memory, u64{768_MiB}));
     minimum_memory =
@@ -287,6 +298,31 @@ void TextureCache<P>::FreeSentencedImages() {
 }
 
 template <class P>
+void TextureCache<P>::LimitBySystemMemory() {
+    if constexpr (requires { runtime.SystemMemoryHeadroom(); }) {
+        limited_by_system_memory = false;
+        const std::optional<s64> headroom = runtime.SystemMemoryHeadroom();
+        if (!headroom || !native_thresholds_applied) {
+            return;
+        }
+        // What the cache can reach doesn't change as it grows: free RAM goes down as much as its
+        // use goes up. Images waiting to be freed still hold their memory.
+        u64 held = total_used_memory + gpu_sentenced_bytes;
+        for (const u64 bytes : sentenced_image_bytes) {
+            held += bytes;
+        }
+        const u64 limit = static_cast<u64>(
+            (std::max)(static_cast<s64>(held) + *headroom, static_cast<s64>(MinLimitedCriticalMemory)));
+        if (limit < critical_memory) {
+            limited_by_system_memory = true;
+            critical_memory = limit;
+            expected_memory =
+                (std::min)(expected_memory, limit - (std::min)(limit / 2, u64{768_MiB}));
+        }
+    }
+}
+
+template <class P>
 void TextureCache<P>::CollectDuringFrame() {
     // Loading a world, title 1 creates ~4.6 GB of images in one frame of 5 to 10 s. TickFrame
     // doesn't run meanwhile, so the images of the last world stay while the new ones arrive:
@@ -299,6 +335,7 @@ void TextureCache<P>::CollectDuringFrame() {
     }
     bytes_created_this_frame = 0;
     FreeSentencedImages();
+    LimitBySystemMemory();
     if (total_used_memory >= expected_memory) {
         RunGarbageCollector();
     }
@@ -382,6 +419,7 @@ void TextureCache<P>::TickFrame() {
                                            : old_critical - critical_memory;
                     const bool log = budget_check_frames == 1 || change >= 256_MiB;
                     ApplyThresholdOverrides(log);
+                    LimitBySystemMemory();
                     if (log) {
                         LOG_INFO(HW_GPU,
                                  "Memory margins: base {} MiB, out of memory {} MiB, block slack {} MiB",

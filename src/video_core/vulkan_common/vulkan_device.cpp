@@ -24,6 +24,7 @@
 #include "common/fs/fs.h"
 #include "common/fs/path_util.h"
 #include "common/literals.h"
+#include "common/memory_detect.h"
 #include <ranges>
 #include "common/settings.h"
 #include "common/settings_enums.h"
@@ -1751,6 +1752,8 @@ u64 Device::GetDeviceMemorySlack() const {
     return statistics.blockBytes - (std::min)(statistics.blockBytes, statistics.allocationBytes);
 }
 
+constexpr u64 SystemMemoryReservePercent = 15;
+
 u64 Device::GetDeviceMemoryBudget() const {
     if (!extensions.memory_budget) {
         return 0;
@@ -1777,12 +1780,27 @@ u64 Device::GetDeviceMemoryBudget() const {
     }
     if (is_integrated) {
         // An integrated GPU's device-local heap is system memory (a Radeon 780M reported a 21 GB
-        // budget): following it let the texture cache fill that much RAM before collecting, and
-        // kept ASTC uncompressed. Its budget is at most the share CollectPhysicalMemoryInfo
-        // gives it (4 GiB, 6 GiB with aggressive VRAM use).
-        result = (std::min)(result, device_access_memory);
+        // budget): following it let the texture cache fill that much RAM before collecting. No
+        // size suits every game and machine, so its budget is the RAM but the part left to the
+        // system, and the texture cache follows free RAM below that (LimitBySystemMemory). Where
+        // free RAM isn't known, it is the share CollectPhysicalMemoryInfo gives it.
+        if (const auto headroom = SystemMemoryHeadroom()) {
+            const u64 total = Common::GetMemInfo().TotalPhysicalMemory;
+            result = total - total / 100 * SystemMemoryReservePercent;
+        } else {
+            result = (std::min)(result, device_access_memory);
+        }
     }
     return result;
+}
+
+std::optional<s64> Device::SystemMemoryHeadroom() const {
+    const u64 available = Common::GetAvailablePhysicalMemory();
+    if (!is_integrated || available == 0) {
+        return std::nullopt;
+    }
+    const u64 total = Common::GetMemInfo().TotalPhysicalMemory;
+    return static_cast<s64>(available) - static_cast<s64>(total / 100 * SystemMemoryReservePercent);
 }
 
 void Device::CollectPhysicalMemoryInfo() {

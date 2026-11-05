@@ -1189,7 +1189,8 @@ void UseBc3ForSwitch2OnSmallCards(const Device& device) {
     const u64 budget = device.GetDeviceMemoryBudget();
     const u64 memory = budget != 0 ? budget : device.GetDeviceLocalMemory();
     const char* keep = std::getenv("EDEN_NX2_KEEP_ASTC");
-    if (memory >= 20_GiB || (keep != nullptr && keep[0] == '1')) {
+    // An integrated GPU's budget is a part of the RAM, not room to spare for uncompressed ASTC.
+    if ((memory >= 20_GiB && !device.IsIntegrated()) || (keep != nullptr && keep[0] == '1')) {
         return;
     }
     LOG_WARNING(Render_Vulkan,
@@ -2501,6 +2502,10 @@ bool TextureCacheRuntime::IsFree(u64 tick) const noexcept {
 
 u64 TextureCacheRuntime::GetDeviceMemoryBudget() const {
     return device.GetDeviceMemoryBudget();
+}
+
+std::optional<s64> TextureCacheRuntime::SystemMemoryHeadroom() const {
+    return device.SystemMemoryHeadroom();
 }
 
 u64 TextureCacheRuntime::GetDeviceMemorySlack() const {
