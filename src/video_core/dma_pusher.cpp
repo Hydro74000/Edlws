@@ -30,6 +30,11 @@ namespace Tegra {
 constexpr u32 MacroRegistersStart = 0xE00;
 constexpr u32 ComputeInline = 0x6D;
 
+// Device pages found unwritten by the GPU with no compute or copy work left queued (the split's
+// front only, for all channels). Same layout as Tegra::g_nx2_gpu_written_pages.
+static std::array<u64, (u64{1} << (36 - Nx2WrittenPageBits)) / 64> checked_list_pages{};
+static u32 list_page_checks{};
+
 DmaPusher::DmaPusher(Core::System& system_, MemoryManager& memory_manager_, Control::ChannelState& channel_state_)
     : system{system_}
     , memory_manager{memory_manager_}
@@ -175,13 +180,20 @@ bool DmaPusher::Step() {
         // The split's back marks the pages GPU work writes as it runs that work: a page first
         // written by a dispatch or copy still queued for it reads as unwritten, and its words as
         // stale (Fast Fusion's culling fills in instanced draws' arguments; stale ones asked for
-        // billions of instances and lost the device loading a race).
-        bool gpu_written =
-            IsGpuWrittenCommands(dma_state.dma_get, size_t{header.size} * sizeof(u32));
-        if (!gpu_written && VideoCommon::GpuSplit::Get().Active() &&
-            VideoCommon::GpuSplit::Get().WaitForWriters()) {
-            gpu_written =
-                IsGpuWrittenCommands(dma_state.dma_get, size_t{header.size} * sizeof(u32));
+        // billions of instances and lost the device loading a race). A page once marked stays
+        // marked, so that is only a page's first write: pages found unwritten aren't waited for
+        // again. Waiting for every command list stopped the front with the back whenever that
+        // stalled, instead of it filling the ring (most hitches left on a GTX 1070).
+        const size_t list_bytes = size_t{header.size} * sizeof(u32);
+        bool gpu_written = IsGpuWrittenCommands(dma_state.dma_get, list_bytes);
+        if (auto& split = VideoCommon::GpuSplit::Get();
+            !gpu_written && split.Active() && split.HasQueuedWriters() &&
+            !AreListPagesChecked(dma_state.dma_get, list_bytes)) {
+            split.WaitForWriters();
+            gpu_written = IsGpuWrittenCommands(dma_state.dma_get, list_bytes);
+            if (!gpu_written) {
+                MarkListPagesChecked(dma_state.dma_get, list_bytes);
+            }
         }
         // The words as submitted, unless this is a resumed entry or the GPU has newer ones the
         // safe read below would flush (with the split, the front can't tell: it reads memory
@@ -556,6 +568,38 @@ void DmaPusher::RefreshSnapshot(CommandList& list, u64 now) {
         }
         memory_manager.ReadBlockUnsafe(entry.addr, list.submitted_words.data() + offset,
                                        entry.size * sizeof(u32));
+    }
+}
+
+bool DmaPusher::AreListPagesChecked(GPUVAddr address, size_t size) {
+    // Forgotten now and then: memory a game gives back can come back as a GPU-written list.
+    constexpr u32 ChecksBetweenResets = 1U << 20;
+    if (++list_page_checks == ChecksBetweenResets) {
+        list_page_checks = 0;
+        checked_list_pages.fill(0);
+    }
+    for (GPUVAddr page = address & ~GPUVAddr{0xfff}; page < address + size; page += 0x1000) {
+        const auto device = memory_manager.GpuToCpuAddress(page);
+        if (!device) {
+            return false;
+        }
+        const u64 index = *device >> Tegra::Nx2WrittenPageBits;
+        if (index >= checked_list_pages.size() * 64 ||
+            ((checked_list_pages[index / 64] >> (index % 64)) & 1) == 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void DmaPusher::MarkListPagesChecked(GPUVAddr address, size_t size) {
+    for (GPUVAddr page = address & ~GPUVAddr{0xfff}; page < address + size; page += 0x1000) {
+        if (const auto device = memory_manager.GpuToCpuAddress(page)) {
+            const u64 index = *device >> Tegra::Nx2WrittenPageBits;
+            if (index < checked_list_pages.size() * 64) {
+                checked_list_pages[index / 64] |= u64{1} << (index % 64);
+            }
+        }
     }
 }
 

@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <cstdlib>
+#include <source_location>
 
 #include "common/assert.h"
 #include "common/logging.h"
@@ -65,8 +66,8 @@ void OnBack(const Func& func) {
     }
 }
 
-void DrainBack() {
-    VideoCommon::GpuSplit::Get().Drain();
+void DrainBack(const std::source_location& where = std::source_location::current()) {
+    VideoCommon::GpuSplit::Get().Drain(where);
 }
 
 } // Anonymous namespace

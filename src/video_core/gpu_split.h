@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <atomic>
 #include <cstring>
 #include <functional>
@@ -139,6 +140,11 @@ public:
     /// Compute or copy work was just sent: what can write GPU-written command lists.
     void NoteWriter() {
         last_writer_position = write_position;
+    }
+    /// Whether the back has yet to run compute or copy work sent so far.
+    [[nodiscard]] bool HasQueuedWriters() const {
+        return consumed.load(std::memory_order_acquire) <
+               (std::min)(last_writer_position, write_position);
     }
     /// Waits until the back executed the compute and copy work sent so far (not what came after).
     /// Returns whether any of it was still queued.

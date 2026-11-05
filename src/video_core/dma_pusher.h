@@ -204,6 +204,9 @@ public:
     void RecordParsedEntry(const CommandListHeader& header, std::span<const CommandHeader> commands);
     /// Whether the entry lies on device pages the GPU has written (NX2).
     bool IsGpuWrittenCommands(GPUVAddr address, size_t size);
+    /// Whether the entry's device pages were found unwritten with no writer queued.
+    bool AreListPagesChecked(GPUVAddr address, size_t size);
+    void MarkListPagesChecked(GPUVAddr address, size_t size);
     /// Copies the list's words from memory again, as of suspension count `now`.
     void RefreshSnapshot(CommandList& list, u64 now);
 
