@@ -446,9 +446,7 @@ NvResult nvhost_gpu::SubmitGPFIFOImpl(IoctlSubmitGpfifo& params, Tegra::CommandL
             return value == nullptr || value[0] != '0';
         }();
         if (snapshot && channel_state->memory_manager && channel_state->payload) {
-            // Before the copy: a suspension during it must count as one after it.
-            entries.snapshot_suspensions =
-                channel_state->payload->dma_pusher.suspensions.load(std::memory_order_acquire);
+            auto& memory_manager = *channel_state->memory_manager;
             size_t words = 0;
             for (const auto& entry : entries.command_lists) {
                 words += entry.size;
@@ -457,9 +455,17 @@ NvResult nvhost_gpu::SubmitGPFIFOImpl(IoctlSubmitGpfifo& params, Tegra::CommandL
             entries.submitted_offsets.reserve(entries.command_lists.size());
             size_t offset = 0;
             for (const auto& entry : entries.command_lists) {
+                // A range not mapped for the GPU yet reads as zeros, and an empty copy ran
+                // nothing: Pokopia on a slow machine never reached the fence it waits on after
+                // its first frame. The game has written these words: they are read when parsed.
+                const size_t bytes = size_t{entry.size} * sizeof(u32);
+                if (!memory_manager.IsFullyMappedRange(entry.addr, bytes)) {
+                    entries.submitted_offsets.push_back(Tegra::CommandList::NotCopied);
+                    continue;
+                }
                 entries.submitted_offsets.push_back(static_cast<u32>(offset));
-                channel_state->memory_manager->ReadBlockUnsafe(
-                    entry.addr, entries.submitted_words.data() + offset, entry.size * sizeof(u32));
+                memory_manager.ReadBlockUnsafe(entry.addr, entries.submitted_words.data() + offset,
+                                               bytes);
                 offset += entry.size;
             }
         }

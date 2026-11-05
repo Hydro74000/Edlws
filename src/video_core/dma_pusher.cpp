@@ -69,24 +69,8 @@ bool DmaPusher::Step() {
     if (!ib_enable || dma_pushbuffer.empty()) {
         return false;
     }
-    const u64 suspensions_before = suspensions.load(std::memory_order_relaxed);
     if (!puller.ResumeAcquire(*this)) {
         return false;
-    }
-    // Lists queued while the channel waited were read from memory, not as submitted: the game
-    // writes the commands a list runs before it releases the acquire, so the words at submit time
-    // could be older. Reading them as late as the parse is too late in Hyrule Warriors: Age of
-    // Imprisonment fights: a command ring the game had already refilled for a later frame, read
-    // as this frame's commands (methods on unbound subchannels, garbage QMDs, then a channel
-    // waiting forever on a release it never got). The acquire is released now, so the commands
-    // are written and the memory not yet reused: copy them here. EDEN_NX2_RESNAPSHOT=0: off.
-    if (ResnapshotEnabled() && suspensions.load(std::memory_order_relaxed) != suspensions_before) {
-        const u64 now = suspensions.load(std::memory_order_acquire);
-        for (CommandList& list : dma_pushbuffer) {
-            if (!list.submitted_offsets.empty()) {
-                RefreshSnapshot(list, now);
-            }
-        }
     }
 
     CommandList& command_list = dma_pushbuffer.front();
@@ -172,7 +156,6 @@ bool DmaPusher::Step() {
                 CheckSubmitHash(header, command_list.submit_hashes[dma_pushbuffer_subindex]);
             }
         }
-        // A resumed entry is read again: the words after the acquire may be new by now.
         // A safe read flushes the caches, which belong to the split's back thread while it runs
         // (the split only starts with unsafe reads; the settings can change mid-game).
         const bool use_safe = !VideoCommon::GpuSplit::Get().Active() &&
@@ -195,15 +178,17 @@ bool DmaPusher::Step() {
                 MarkListPagesChecked(dma_state.dma_get, list_bytes);
             }
         }
-        // The words as submitted, unless this is a resumed entry or the GPU has newer ones the
+        // The words as submitted, also for entries resumed or queued behind an acquire: how long
+        // a list waits here depends on how far the front lags the game, and memory read later may
+        // hold a later frame's words. Mario Kart World rewrites a render target word in place
+        // each frame: read late, a frame went to the next frame's image, and the image presented
+        // was three frames old. Not when the entry has no copy, or the GPU has newer words the
         // safe read below would flush (with the split, the front can't tell: it reads memory
         // unflushed anyway). Entries on pages the GPU writes (culling) always take the flushing
         // read: their words at submit time are an older frame's.
-        const bool submitted = command_resume_offset == 0 &&
-                               dma_pushbuffer_subindex < command_list.submitted_offsets.size() &&
-                               (command_list.snapshot_suspensions & 1) == 0 &&
-                               command_list.snapshot_suspensions ==
-                                   suspensions.load(std::memory_order_acquire) &&
+        const bool submitted = dma_pushbuffer_subindex < command_list.submitted_offsets.size() &&
+                               command_list.submitted_offsets[dma_pushbuffer_subindex] !=
+                                   CommandList::NotCopied &&
                                !gpu_written &&
                                !(use_safe && memory_manager.IsMemoryDirty(dma_state.dma_get,
                                                                           header.size * sizeof(u32)));
@@ -213,7 +198,8 @@ bool DmaPusher::Step() {
                     command_list.submitted_offsets[dma_pushbuffer_subindex],
                 header.size};
             RecordParsedEntry(header, commands);
-            command_resume_offset += ProcessCommands(commands, 0);
+            command_resume_offset +=
+                ProcessCommands(commands.subspan(command_resume_offset), command_resume_offset);
         } else if (use_safe) {
             Tegra::Memory::GpuGuestMemory<Tegra::CommandHeader, Tegra::Memory::GuestMemoryFlags::SafeRead>headers(memory_manager, dma_state.dma_get, header.size, &command_headers);
             const std::span<const CommandHeader> commands{headers.data(), headers.size()};
@@ -555,19 +541,6 @@ void DmaPusher::CallMultiMethod(const u32* base_start, u32 num_methods) {
         subchannel->ConsumeSink(system);
         subchannel->current_dma_segment = dma_state.dma_get + dma_state.dma_word_offset;
         subchannel->CallMultiMethod(system, dma_state.method, base_start, num_methods, dma_state.method_count);
-    }
-}
-
-void DmaPusher::RefreshSnapshot(CommandList& list, u64 now) {
-    list.snapshot_suspensions = now;
-    for (size_t i = 0; i < list.command_lists.size() && i < list.submitted_offsets.size(); ++i) {
-        const CommandListHeader& entry = list.command_lists[i];
-        const u32 offset = list.submitted_offsets[i];
-        if (offset + entry.size > list.submitted_words.size()) {
-            continue;
-        }
-        memory_manager.ReadBlockUnsafe(entry.addr, list.submitted_words.data() + offset,
-                                       entry.size * sizeof(u32));
     }
 }
 
