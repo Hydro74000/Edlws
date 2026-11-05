@@ -68,6 +68,9 @@ vulkansdk*.exe
 # Build-time generated external sources
 externals/generated
 
+# Qt resources compiled for PySide, generated from the .qrc files
+*_rc.py
+
 # Plans and audits
 plan_*.md
 audit_*.md
