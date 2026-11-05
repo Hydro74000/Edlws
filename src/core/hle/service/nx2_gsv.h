@@ -1752,6 +1752,8 @@ private:
             frames_ahead = 0;
         }
         const auto entered = std::chrono::steady_clock::now();
+        NoteFrameTime(entered);
+        m_frame_patience = FramePatience();
         if (frames_ahead == 1 || (frames_ahead == -1 && !WaitForFrame(~w[22], w[24], true))) {
             LOG_DEBUG(Service, "nx2:vi2 present #{} fence ({}, {:#x}), waiting for ({}, {:#x}); now {:#x}",
                       m_presents, ~w[22], w[24], m_previous_fence_id, m_previous_fence_value,
@@ -1839,6 +1841,10 @@ private:
         std::chrono::steady_clock::time_point last_present{};
     } m_stats{};
     u32 m_previous_fence_id{~0U}; // none yet (WaitForFrame ignores ids >= 192)
+    std::chrono::steady_clock::time_point m_last_frame_start{};
+    std::chrono::microseconds m_smoothed_frame{};
+    std::chrono::microseconds m_target_frame{};
+    std::chrono::microseconds m_frame_patience{3'000};
     u32 m_previous_fence_value{};
 
     // The console flips one frame per 60 Hz vblank and keeps the rest queued, so a game can't
@@ -1888,6 +1894,49 @@ private:
                 kernel, kernel.HardwareTimer().GetTick() + wait.count() + 2));
         }
         m_next_vblank += interval;
+        // The pace the game aims for: the fastest it asked for. Title 1 falls to two vblanks a frame
+        // on its own when late, which doesn't make that pace on time. A slower pace only counts
+        // once the machine keeps up with it, as with a game at 30 fps by design.
+        const auto asked = std::chrono::duration_cast<std::chrono::microseconds>(interval);
+        if (m_target_frame.count() == 0 || asked < m_target_frame) {
+            m_target_frame = asked;
+        } else if (m_smoothed_frame <= asked) {
+            m_target_frame += (asked - m_target_frame) / 128;
+        }
+    }
+
+    void NoteFrameTime(std::chrono::steady_clock::time_point now) {
+        // A frame's stall doesn't say how fast the machine runs: past MaxFrameSample it counts
+        // as that much.
+        constexpr std::chrono::microseconds MaxFrameSample{100'000};
+        if (m_last_frame_start != std::chrono::steady_clock::time_point{}) {
+            const auto frame = std::chrono::duration_cast<std::chrono::microseconds>(
+                now - m_last_frame_start);
+            m_smoothed_frame += ((std::min)(frame, MaxFrameSample) - m_smoothed_frame) / 8;
+        }
+        m_last_frame_start = now;
+    }
+
+    // How long a present keeps waiting for its frame with a channel suspended. Title 1's GPU can
+    // wait on semaphores its CPU releases after the present returns, so this can't be for good:
+    // past this, the game starts the next frame and writes over the texture handles of the HUD
+    // the GPU thread hasn't read yet (other textures in its sprites for a frame). On a machine
+    // keeping up, the wait only costs speed (a GTX 1070 lost 13% to 8 ms). On one far behind the
+    // pace the game asks for, the GPU is the limit and it costs little: this grows with the
+    // square of how late frames are, from nothing on time to nearly all of the delay.
+    // EDEN_NX2_FRAME_PATIENCE_PERCENT scales it.
+    std::chrono::microseconds FramePatience() const {
+        constexpr std::chrono::microseconds Least{3'000};
+        static const long percent = [] {
+            const char* value = std::getenv("EDEN_NX2_FRAME_PATIENCE_PERCENT");
+            return value != nullptr ? std::strtol(value, nullptr, 10) : 100L;
+        }();
+        const auto late = m_smoothed_frame - m_target_frame;
+        if (late.count() <= 0) {
+            return Least;
+        }
+        const auto patience = late * late.count() / m_smoothed_frame.count() * percent / 100;
+        return std::clamp(patience, Least, std::chrono::microseconds{33'000});
     }
 
     /// Waits until the fence is reached. With `unless_gpu_waits`, gives up after a few ms once a
@@ -1928,7 +1977,7 @@ private:
                 if (unless_gpu_waits) {
                     gpu_waited |= system.GPU().HasSuspendedChannels();
                     if (gpu_waited &&
-                        std::chrono::steady_clock::now() - start > std::chrono::milliseconds{3}) {
+                        std::chrono::steady_clock::now() - start > m_frame_patience) {
                         return false;
                     }
                 }
