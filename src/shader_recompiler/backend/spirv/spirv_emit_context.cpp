@@ -1106,11 +1106,14 @@ void EmitContext::DefineGlobalMemoryFunctions(const IR::Program& program) {
         }
     };
     std::array<bool, static_cast<size_t>(Count)> used{};
+    bool uses_compare_exchange{};
     for (const IR::Block* const block : program.blocks) {
         for (const IR::Inst& inst : block->Instructions()) {
             if (const auto kind = kind_of(inst.GetOpcode())) {
                 used[static_cast<size_t>(*kind)] = true;
             }
+            uses_compare_exchange |=
+                inst.GetOpcode() == IR::Opcode::GlobalAtomicCompareExchange32;
         }
     }
     const Id scope{Const(static_cast<u32>(spv::Scope::Device))};
@@ -1154,6 +1157,23 @@ void EmitContext::DefineGlobalMemoryFunctions(const IR::Program& program) {
         OpReturnValue(ConstantNull(type));
         OpFunctionEnd();
         global_atomic_funcs[index] = func_id;
+    }
+    if (uses_compare_exchange) {
+        const Id function_type{TypeFunction(U32[1], U64, U32[1], U32[1])};
+        atomic_cas_global_func_u32 =
+            OpFunction(U32[1], spv::FunctionControlMask::DontInline, function_type);
+        const Id address{OpFunctionParameter(U64)};
+        const Id comparator{OpFunctionParameter(U32[1])};
+        const Id value{OpFunctionParameter(U32[1])};
+        define_body(&StorageDefinitions::U32, address, storage_types.U32.element, 2,
+                    [&](Id pointer, Id, Id) {
+                        OpReturnValue(OpAtomicCompareExchange(U32[1], pointer, scope,
+                                                              zero, zero,
+                                                              value, comparator));
+                    });
+        // No buffer matched: report success so a guest CAS retry loop cannot spin forever.
+        OpReturnValue(comparator);
+        OpFunctionEnd();
     }
 }
 
