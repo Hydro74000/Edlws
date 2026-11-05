@@ -140,6 +140,10 @@ static std::filesystem::path GetSwitchExeDirectory(const char* argv0) {
 static void LoadNx2Switches(const char* argv0) {
     // Later files overwrite earlier entries; the real environment is checked only at the end.
     std::map<std::string, std::string> entries;
+#ifdef __APPLE__
+    ParseSwitchFile(Common::FS::GetBundleDirectory() / "Contents/Resources/nx2_switches.txt",
+                    entries);
+#endif
     if (const auto exe_dir = GetSwitchExeDirectory(argv0); !exe_dir.empty()) {
         ParseSwitchFile(exe_dir / "nx2_switches.txt", entries);
     }
