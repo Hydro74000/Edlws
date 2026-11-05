@@ -366,11 +366,22 @@ GraphicsPipeline::GraphicsPipeline(
     }};
     // Before the build: it frees the modules this looks at.
     configure_func = ConfigureFunc(*spv_modules, stage_infos);
+    build_task = std::move(func);
     if (worker_thread) {
-        worker_thread->QueueWork(std::move(func));
+        worker_thread->QueueWork([this] { RunBuild(); });
     } else {
-        func();
+        RunBuild();
     }
+}
+
+void GraphicsPipeline::RunBuild() {
+    // A draw or dispatch that needs the pipeline builds it on the scheduler thread instead of
+    // waiting for the worker queue, which can hold hundreds of builds, to reach it.
+    if (build_claimed.exchange(true)) {
+        return;
+    }
+    build_task();
+    build_task = nullptr;
 }
 
 void GraphicsPipeline::AddTransition(GraphicsPipeline* transition) {
@@ -691,6 +702,7 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
         scheduler.Record([this, where = std::source_location::current()](vk::CommandBuffer) {
             const VideoCommon::LongWait long_wait{
                 "Vulkan worker waiting for a graphics pipeline build", where};
+            RunBuild();
             std::unique_lock lock{build_mutex};
             build_condvar.wait(lock, [this] { return is_built.load(std::memory_order::relaxed); });
         });

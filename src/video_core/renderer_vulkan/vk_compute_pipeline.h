@@ -7,6 +7,7 @@
 #pragma once
 
 #include <atomic>
+#include <functional>
 #include <condition_variable>
 #include <mutex>
 
@@ -80,6 +81,11 @@ private:
     std::condition_variable build_condvar;
     std::mutex build_mutex;
     std::atomic_bool is_built{false};
+    /// Builds the pipeline once, on whichever thread gets here first.
+    void RunBuild();
+
+    std::function<void()> build_task;
+    std::atomic_bool build_claimed{false};
 };
 
 } // namespace Vulkan
