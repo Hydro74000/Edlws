@@ -128,6 +128,8 @@ void KeplerCompute::ProcessNativeReportSemaphore(u32 argument) {
                 if (device) {
                     Tegra::Nx2MirrorShadow::Get().NoteCombinedRelease(*device, address, guest,
                                                                       stored, combine);
+                    // An acquire this value meets latches now: a later write may change it.
+                    Tegra::Nx2SemaphoreWaiters::Get().OnWrite(*device, stored);
                 }
             };
             if (device) {
