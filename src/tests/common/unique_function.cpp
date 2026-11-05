@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2021 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <memory>
 #include <string>
 
 #include <catch2/catch_test_macros.hpp>
@@ -106,4 +107,16 @@ TEST_CASE("UniqueFunction", "[common]") {
         }
         REQUIRE(num_destroyed == 1);
     }
+}
+
+TEST_CASE("UniqueFunction: Holds its own copy of an lvalue", "[common]") {
+    auto calls = std::make_shared<int>(0);
+    Common::UniqueFunction<void> func;
+    {
+        const auto functor = [calls] { ++*calls; };
+        func = Common::UniqueFunction<void>{functor};
+    }
+    REQUIRE(calls.use_count() == 2);
+    func();
+    REQUIRE(*calls == 1);
 }
