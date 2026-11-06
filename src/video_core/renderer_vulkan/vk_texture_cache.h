@@ -269,6 +269,7 @@ public:
         u32 unused_frames;
     };
     std::deque<PendingTranscode> pending_transcodes;
+    void ReleaseFinishedTranscodes();
     /// Decode images the GPU is done with, for the next texture of the same shape.
     std::vector<PendingTranscode> free_transcodes;
 

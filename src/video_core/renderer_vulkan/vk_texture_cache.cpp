@@ -2602,8 +2602,7 @@ void TextureCacheRuntime::ReleaseMsaaScratchImage(VkImage image) {
     }
 }
 
-void TextureCacheRuntime::TickFrame() {
-    static constexpr u32 MAX_UNUSED_SCRATCH_FRAMES = 60;
+void TextureCacheRuntime::ReleaseFinishedTranscodes() {
     // Finished decode images wait for the next texture of their shape, up to this much memory.
     static constexpr u64 MaxFreeTranscodeBytes = u64{256} << 20;
     const auto decode_bytes = [](const PendingTranscode& t) {
@@ -2627,6 +2626,11 @@ void TextureCacheRuntime::TickFrame() {
         }
         pending_transcodes.pop_front();
     }
+}
+
+void TextureCacheRuntime::TickFrame() {
+    static constexpr u32 MAX_UNUSED_SCRATCH_FRAMES = 60;
+    ReleaseFinishedTranscodes();
     std::erase_if(free_transcodes, [](PendingTranscode& t) {
         return ++t.unused_frames > MAX_UNUSED_SCRATCH_FRAMES;
     });
@@ -4622,6 +4626,9 @@ void TextureCacheRuntime::AccelerateImageUploadLayers(
 void TextureCacheRuntime::TranscodeAstcToBcn(
     Image& image, const StagingBufferRef& map,
     std::span<const VideoCommon::SwizzleParameters> swizzles) {
+    // A frame loading a world decodes hundreds of textures: waiting for the next one to take back
+    // the images the GPU is done with held 2 to 3 GB of them.
+    ReleaseFinishedTranscodes();
     const ImageInfo& info = image.info;
     const u32 width = info.size.width;
     const u32 height = info.size.height;
