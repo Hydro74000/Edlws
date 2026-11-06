@@ -4,6 +4,9 @@
 // SPDX-FileCopyrightText: 2017 Citra Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cerrno>
+#include <cstdlib>
+#include <limits>
 #include <array>
 #include <stdexcept>
 #include <utility>
@@ -92,12 +95,17 @@ int ParamPackage::Get(const std::string& key, int default_value) const {
         return default_value;
     }
 
-    try {
-        return std::stoi(pair->second);
-    } catch (const std::logic_error&) {
+    // No std::stoi: its exception is not caught on macOS, whatever the catch says.
+    const char* const text = pair->second.c_str();
+    char* end{};
+    errno = 0;
+    const long value = std::strtol(text, &end, 10);
+    if (end == text || errno == ERANGE || value < std::numeric_limits<int>::min() ||
+        value > std::numeric_limits<int>::max()) {
         LOG_ERROR(Common, "failed to convert {} to int", pair->second);
         return default_value;
     }
+    return static_cast<int>(value);
 }
 
 float ParamPackage::Get(const std::string& key, float default_value) const {
@@ -107,12 +115,15 @@ float ParamPackage::Get(const std::string& key, float default_value) const {
         return default_value;
     }
 
-    try {
-        return std::stof(pair->second);
-    } catch (const std::logic_error&) {
+    const char* const text = pair->second.c_str();
+    char* end{};
+    errno = 0;
+    const float value = std::strtof(text, &end);
+    if (end == text || errno == ERANGE) {
         LOG_ERROR(Common, "failed to convert {} to float", pair->second);
         return default_value;
     }
+    return value;
 }
 
 void ParamPackage::Set(const std::string& key, std::string value) {
