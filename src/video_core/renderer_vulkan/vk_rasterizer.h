@@ -176,6 +176,10 @@ private:
     template <typename Func>
     void PrepareDraw(bool is_indexed, Func&&);
 
+    /// Records a draw call. Every draw goes through here: see Scheduler::GraphicsPipelineMissing.
+    template <typename Func>
+    void RecordDraw(Func&& draw);
+
     struct DrawSkipStats {
         std::array<u64, static_cast<size_t>(DrawSkip::Count)> skipped{};
         u64 draws{};
