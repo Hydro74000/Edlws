@@ -22,6 +22,7 @@ add_executable(tests
     common/zstd_compression.cpp
     core/core_timing.cpp
     core/ldn.cpp
+    core/malformed_containers.cpp
     core/internal_network/socket_proxy.cpp
     core/nup_writer.cpp
     core/priority_queue.cpp

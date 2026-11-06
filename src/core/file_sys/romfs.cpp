@@ -5,9 +5,12 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <memory>
+#include <optional>
+#include <utility>
+#include <vector>
 
-#include "common/assert.h"
 #include "common/common_types.h"
+#include "common/logging.h"
 #include "common/string_util.h"
 #include "common/swap.h"
 #include "core/file_sys/fsmitm_romfsbuild.h"
@@ -66,7 +69,8 @@ struct RomFSTraversalContext {
 };
 
 template <typename EntryType, auto Member>
-std::pair<EntryType, std::string> GetEntry(const RomFSTraversalContext& ctx, size_t offset) {
+std::optional<std::pair<EntryType, std::string>> GetEntry(const RomFSTraversalContext& ctx,
+                                                          size_t offset) {
     const size_t entry_end = offset + sizeof(EntryType);
     const std::vector<u8>& vec = ctx.*Member;
     const size_t size = vec.size();
@@ -74,57 +78,75 @@ std::pair<EntryType, std::string> GetEntry(const RomFSTraversalContext& ctx, siz
     EntryType entry{};
 
     if (entry_end > size) {
-        return {};
+        return std::nullopt;
     }
     std::memcpy(&entry, data + offset, sizeof(EntryType));
 
     const size_t name_length = (std::min)(entry_end + entry.name_length, size) - entry_end;
     std::string name(reinterpret_cast<const char*>(data + entry_end), name_length);
 
-    return {entry, std::move(name)};
+    return std::pair{entry, std::move(name)};
 }
 
-std::pair<DirectoryEntry, std::string> GetDirectoryEntry(const RomFSTraversalContext& ctx,
-                                                         size_t directory_offset) {
+auto GetDirectoryEntry(const RomFSTraversalContext& ctx, size_t directory_offset) {
     return GetEntry<DirectoryEntry, &RomFSTraversalContext::directory_meta>(ctx, directory_offset);
 }
 
-std::pair<FileEntry, std::string> GetFileEntry(const RomFSTraversalContext& ctx,
-                                               size_t file_offset) {
+auto GetFileEntry(const RomFSTraversalContext& ctx, size_t file_offset) {
     return GetEntry<FileEntry, &RomFSTraversalContext::file_meta>(ctx, file_offset);
 }
 
-void ProcessFile(const RomFSTraversalContext& ctx, u32 this_file_offset,
-                 std::shared_ptr<VectorVfsDirectory>& parent) {
+bool ProcessFile(const RomFSTraversalContext& ctx, u32 this_file_offset,
+                 std::shared_ptr<VectorVfsDirectory>& parent, size_t& files_left) {
     while (this_file_offset != ROMFS_ENTRY_EMPTY) {
         auto entry = GetFileEntry(ctx, this_file_offset);
+        if (!entry || files_left == 0) {
+            return false;
+        }
+        --files_left;
 
-        parent->AddFile(std::make_shared<OffsetVfsFile>(ctx.file, entry.first.size,
-                                                        entry.first.offset + ctx.header.data_offset,
-                                                        std::move(entry.second)));
+        parent->AddFile(std::make_shared<OffsetVfsFile>(ctx.file, entry->first.size,
+                                                        entry->first.offset + ctx.header.data_offset,
+                                                        std::move(entry->second)));
 
-        this_file_offset = entry.first.sibling;
+        this_file_offset = entry->first.sibling;
     }
+    return true;
 }
 
-void ProcessDirectory(const RomFSTraversalContext& ctx, u32 this_dir_offset,
-                      std::shared_ptr<VectorVfsDirectory>& parent) {
-    while (this_dir_offset != ROMFS_ENTRY_EMPTY) {
-        auto entry = GetDirectoryEntry(ctx, this_dir_offset);
-        auto current = std::make_shared<VectorVfsDirectory>(
-            std::vector<VirtualFile>{}, std::vector<VirtualDir>{}, entry.second);
+// Returns false on a corrupt table. The offsets link the entries in chains, so a bad one can form
+// a cycle: walking more entries than the table has room for means there is one. A list of pending
+// directories replaces recursion, which such a table could also make run out of stack.
+bool ProcessDirectories(const RomFSTraversalContext& ctx,
+                        const std::shared_ptr<VectorVfsDirectory>& root) {
+    size_t directories_left = ctx.directory_meta.size() / sizeof(DirectoryEntry);
+    size_t files_left = ctx.file_meta.size() / sizeof(FileEntry);
+    std::vector<std::pair<u32, std::shared_ptr<VectorVfsDirectory>>> pending{{0, root}};
+    while (!pending.empty()) {
+        auto [this_dir_offset, parent] = std::move(pending.back());
+        pending.pop_back();
+        while (this_dir_offset != ROMFS_ENTRY_EMPTY) {
+            auto entry = GetDirectoryEntry(ctx, this_dir_offset);
+            if (!entry || directories_left == 0) {
+                return false;
+            }
+            --directories_left;
+            auto current = std::make_shared<VectorVfsDirectory>(
+                std::vector<VirtualFile>{}, std::vector<VirtualDir>{}, std::move(entry->second));
 
-        if (entry.first.child_file != ROMFS_ENTRY_EMPTY) {
-            ProcessFile(ctx, entry.first.child_file, current);
+            if (!ProcessFile(ctx, entry->first.child_file, current, files_left)) {
+                return false;
+            }
+
+            if (entry->first.child_dir != ROMFS_ENTRY_EMPTY) {
+                pending.emplace_back(entry->first.child_dir, current);
+            }
+
+            parent->AddDirectory(current);
+            this_dir_offset = entry->first.sibling;
         }
-
-        if (entry.first.child_dir != ROMFS_ENTRY_EMPTY) {
-            ProcessDirectory(ctx, entry.first.child_dir, current);
-        }
-
-        parent->AddDirectory(current);
-        this_dir_offset = entry.first.sibling;
     }
+    return true;
 }
 } // Anonymous namespace
 
@@ -144,18 +166,28 @@ VirtualDir ExtractRomFS(VirtualFile file) {
         return nullptr;
     }
 
+    // ReadBytes allocates what it is asked for before reading.
+    if (ctx.header.directory_meta.size > file->GetSize() ||
+        ctx.header.file_meta.size > file->GetSize()) {
+        LOG_ERROR(Loader, "RomFS metadata larger than its file");
+        return nullptr;
+    }
+
     ctx.file = file;
     ctx.directory_meta =
         file->ReadBytes(ctx.header.directory_meta.size, ctx.header.directory_meta.offset);
     ctx.file_meta = file->ReadBytes(ctx.header.file_meta.size, ctx.header.file_meta.offset);
 
-    ProcessDirectory(ctx, 0, root_container);
+    if (!ProcessDirectories(ctx, root_container)) {
+        LOG_ERROR(Loader, "Corrupt RomFS metadata");
+        return nullptr;
+    }
 
     if (auto root = root_container->GetSubdirectory(""); root) {
         return root;
     }
 
-    ASSERT(false);
+    LOG_ERROR(Loader, "RomFS without a root directory");
     return nullptr;
 }
 
