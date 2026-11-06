@@ -3,6 +3,8 @@
 
 #include <regex>
 #include <cctype>
+#include <cstdlib>
+#include <cstring>
 
 #include "common/assert.h"
 #include "common/logging.h"
@@ -26,19 +28,19 @@ LaunchParams ParseLaunchParams(Core::System& system, int argc, char *argv[], wch
     int option_index = 0;
     static struct option long_options[] = {
         // clang-format off
-        {"debug", no_argument, 0, 'd'},
+        {"debug", optional_argument, 0, 'd'},
         {"config", required_argument, 0, 'c'},
         {"fullscreen", no_argument, 0, 'f'},
         {"help", no_argument, 0, 'h'},
         {"game", required_argument, 0, 'g'},
         {"multiplayer", required_argument, 0, 'm'},
-        {"program", optional_argument, 0, 'p'},
+        {"program", required_argument, 0, 'p'},
         {"user", required_argument, 0, 'u'},
         {"version", no_argument, 0, 'v'},
-        {"input-profile", no_argument, 0, 'i'},
+        {"input-profile", required_argument, 0, 'i'},
         {"null-render", no_argument, 0, 'n'},
         {"singlecore", no_argument, 0, 's'},
-        {"filter", no_argument, 0, 'x'},
+        {"filter", required_argument, 0, 'x'},
         {"pack-nup", required_argument, 0, 'N'},
         {"unpack-nup", required_argument, 0, 'U'},
         {"edit-nup", required_argument, 0, 'E'},
@@ -55,11 +57,24 @@ LaunchParams ParseLaunchParams(Core::System& system, int argc, char *argv[], wch
     };
 
     while (optind < argc) {
-        if (int arg = getopt_long(argc, argv, "dc:fhg:m:p:u:vinsx", long_options, &option_index); arg != -1) {
+        if (int arg = getopt_long(argc, argv, "d::c:fhg:m:p:u:vi:nsx:", long_options, &option_index); arg != -1) {
             switch (arg) {
-            case 'd':
-                p.override_gdb_port = uint16_t(atoi(optarg));
+            case 'd': {
+                // --debug alone uses the default port. getopt only hands over an optional argument
+                // written as --debug=1234 or -d1234: --debug 1234 is read here.
+                const char* port = optarg;
+                if (port == nullptr && optind < argc && argv[optind][0] != '\0' &&
+                    std::strspn(argv[optind], "0123456789") == std::strlen(argv[optind])) {
+                    port = argv[optind++];
+                }
+                const unsigned long value = port != nullptr ? std::strtoul(port, nullptr, 10) : 1234;
+                if (value >= 1 && value <= 65535) {
+                    p.override_gdb_port = u16(value);
+                } else {
+                    LOG_ERROR(Frontend, "Invalid GDB stub port '{}'", port);
+                }
                 break;
+            }
             case 'c':
                 p.config_path = optarg;
                 break;
@@ -133,8 +148,7 @@ LaunchParams ParseLaunchParams(Core::System& system, int argc, char *argv[], wch
                 break;
             }
             case 'p':
-                p.program_args = argv[optind];
-                ++optind;
+                p.program_args = optarg;
                 break;
             case 'u': {
                 // Launch game with a specific user
@@ -167,8 +181,7 @@ LaunchParams ParseLaunchParams(Core::System& system, int argc, char *argv[], wch
                 p.force_single_core = true;
                 break;
             case 'x':
-                p.log_filter = argv[optind];
-                ++optind;
+                p.log_filter = optarg;
                 break;
             }
         } else {
@@ -239,7 +252,7 @@ void ApplyLaunchParams(LaunchParams const& lp) noexcept {
             " Nickname, password, address and port for multiplayer\n"
             "-p, --program         Pass following string as arguments to executable\n"
             "-u, --user            Select a specific user profile from 0 to 7\n"
-            "-d, --debug           Run the GDB stub on a port from 1 to 65535\n"
+            "-d, --debug [port]    Run the GDB stub on a port from 1 to 65535, 1234 by default\n"
             "-v, --version         Output version information and exit\n"
             "--pack-nup <dump> [<out.nup>]"
             " Pack a loose dump with all its updates and DLC into a NUP file and exit\n"

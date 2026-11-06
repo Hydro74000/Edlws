@@ -3,18 +3,18 @@
 There are two main applications, an SDL-based app (`eden-cli`) and a Qt based app (`eden`); both accept the same command line arguments.
 
 - `./eden <path>`: Running with a single argument and nothing else, will make the emulator look for the given file and load it, this behavior is similar to `eden-cli`; allows dragging and dropping games into the application.
-- `--debug/-d`: Enter debug mode, allow gdb stub at port `1234`
+- `--debug/-d [port]`: Enter debug mode, allow gdb stub at the given port, `1234` by default.
 - `--config/-c`: Specify alternate configuration file.
 - `--fullscreen/-f`: Use fullscreen.
 - `--help/-h`: Display help.
 - `--game/-g <path>`: Alternate way to specify what to load, overrides. However let it be noted that arguments that use `-` will be treated as options/ignored, if your game, for some reason, starts with `-`, in order to safely handle it you may need to specify it as an argument.
 - `--multiplayer/-m`: Specify multiplayer options.
-- `--program/-p`: Specify the program arguments to pass (optional).
+- `--program/-p <args>`: Specify the program arguments to pass (optional).
 - `--user/-u <number>`: Specify the user index.
 - `--version/-v`: Display version and quit.
 - `--input-profile/-i <name>`: Specifies input profile name to use (for player #0 only).
 - `--null-render/-n`: Forces the usage of the "Null" render backend irrespective of settings.
-- `--filter/-x`: Sets the debug log filter irrespective of settings.
+- `--filter/-x <filter>`: Sets the debug log filter irrespective of settings.
 - `--singlecore/-s`: Forces single-core regardless of settings.
 
 Only the Qt frontend supports the following arguments:
