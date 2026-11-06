@@ -272,9 +272,26 @@ public:
         u32 levels;
         u32 layers;
         u32 unused_frames;
+        u32 timing_slot;
     };
     std::deque<PendingTranscode> pending_transcodes;
     void ReleaseFinishedTranscodes();
+
+    /// Timestamps a decode image's start (0) or end (1) in the GPU's command stream.
+    void StampTranscode(u32 slot, u32 index);
+    /// Adds what a decode took the GPU to the last seconds', and adapts astc_texture_limit.
+    void NoteTranscodeTime(u64 microseconds);
+
+    static constexpr u32 TranscodeTimingSlots = 1024;
+    vk::QueryPool transcode_timestamps;
+    u32 next_timing_slot{};
+    /// GPU time decoding took per quarter of a second, over the last few seconds.
+    std::array<u64, 20> transcode_time{};
+    u64 transcode_time_step{};
+    std::chrono::steady_clock::time_point calm_since{};
+    std::chrono::steady_clock::time_point raised_at{};
+    std::chrono::seconds calm_time{30};
+    bool adapts_texture_limit{};
     /// Decode images the GPU is done with, for the next texture of the same shape.
     std::vector<PendingTranscode> free_transcodes;
     u32 astc_texture_limit{};

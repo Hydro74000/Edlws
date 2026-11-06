@@ -1232,9 +1232,6 @@ TextureCacheRuntime::TextureCacheRuntime(const Device& device_, Scheduler& sched
       render_pass_cache{render_pass_cache_}, descriptor_pool{descriptor_pool_},
       compute_pass_descriptor_queue{compute_pass_descriptor_queue_},
       resolution{Settings::values.resolution_info} {
-    if (const char* value = std::getenv("EDEN_NX2_TEXTURE_LIMIT")) {
-        astc_texture_limit = static_cast<u32>(std::strtoul(value, nullptr, 10));
-    }
     // Before anything below reads astc_recompression (passes, view formats).
     UseBc3ForSwitch2OnSmallCards(device);
     // Huge ASTC arrays always decode on the GPU (IsHugeAstcArray), whatever the decode setting.
@@ -1246,6 +1243,19 @@ TextureCacheRuntime::TextureCacheRuntime(const Device& device_, Scheduler& sched
             bc_encoder_pass.emplace(device, scheduler, descriptor_pool,
                                     compute_pass_descriptor_queue);
         }
+    }
+    if (const char* value = std::getenv("EDEN_NX2_TEXTURE_LIMIT")) {
+        astc_texture_limit = static_cast<u32>(std::strtoul(value, nullptr, 10));
+    } else if (bc_encoder_pass && device.GetTimestampPeriod() > 0.f) {
+        adapts_texture_limit = true;
+        transcode_timestamps = device.GetLogical().CreateQueryPool(VkQueryPoolCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .queryType = VK_QUERY_TYPE_TIMESTAMP,
+            .queryCount = TranscodeTimingSlots * 2,
+            .pipelineStatistics = 0,
+        });
     }
     if (!device.IsKhrImageFormatListSupported()) {
         return;
@@ -2623,6 +2633,74 @@ void TextureCacheRuntime::ReleaseMsaaScratchImage(VkImage image) {
     }
 }
 
+void TextureCacheRuntime::StampTranscode(u32 slot, u32 index) {
+    if (!transcode_timestamps || slot == TranscodeTimingSlots) {
+        return;
+    }
+    scheduler.RequestOutsideRenderPassOperationContext();
+    scheduler.Record([pool = *transcode_timestamps, slot, index](vk::CommandBuffer cmdbuf) {
+        if (index == 0) {
+            cmdbuf.ResetQueryPool(pool, slot * 2, 2);
+        }
+        cmdbuf.WriteTimestamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, pool, slot * 2 + index);
+    });
+}
+
+void TextureCacheRuntime::NoteTranscodeTime(u64 microseconds) {
+    // Decoding ASTC on the GPU is what makes a slow one stall, in bursts: 113 Mpx in a frame took
+    // a Vega 600 ms. Over the last 5 s of Mario Kart World that is at worst 10 % of the time on an
+    // RTX 4070 Ti SUPER, 24 % on a GTX 1070 and 70 to 100 % on a Vega, so this reacts to what the
+    // game asks of this GPU and leaves the others alone. Only textures made from then on change.
+    if (!adapts_texture_limit) {
+        return;
+    }
+    using namespace std::chrono;
+    static constexpr u64 HighPercent = 30;
+    static constexpr u64 LowPercent = 10;
+    static constexpr u32 FirstLimit = 2048;
+    static constexpr u32 LowestLimit = 512;
+    static constexpr auto FirstCalmTime = seconds{30};
+    static constexpr auto LongestCalmTime = seconds{480};
+    constexpr u64 StepMs = 250;
+    const u64 window_us = StepMs * 1000 * transcode_time.size();
+    const auto now = steady_clock::now();
+    const u64 step =
+        static_cast<u64>(duration_cast<milliseconds>(now.time_since_epoch()).count()) / StepMs;
+    for (u64 stale = transcode_time_step + 1;
+         stale <= step && stale <= transcode_time_step + transcode_time.size(); ++stale) {
+        transcode_time[stale % transcode_time.size()] = 0;
+    }
+    transcode_time_step = step;
+    transcode_time[step % transcode_time.size()] += microseconds;
+    const u64 percent =
+        std::accumulate(transcode_time.begin(), transcode_time.end(), u64{}) * 100 / window_us;
+    if (percent >= LowPercent) {
+        calm_since = now;
+    }
+    u32 limit = astc_texture_limit;
+    // Calm between two bursts says little: a rise the next burst undoes waits twice as long.
+    if (now - raised_at >= calm_time * 2) {
+        calm_time = FirstCalmTime;
+    }
+    if (percent >= HighPercent && limit != LowestLimit) {
+        limit = limit == 0 ? FirstLimit : (std::max)(limit / 2, LowestLimit);
+        transcode_time.fill(0);
+        if (now - raised_at < calm_time * 2) {
+            calm_time = (std::min)(calm_time * 2, seconds{LongestCalmTime});
+        }
+    } else if (limit != 0 && now - calm_since >= calm_time) {
+        limit = limit >= FirstLimit ? 0 : limit * 2;
+        calm_since = now;
+        raised_at = now;
+    }
+    if (limit != astc_texture_limit) {
+        LOG_INFO(Render_Vulkan, "ASTC decoding took {}% of the GPU's time: new textures keep {}",
+                 percent, limit == 0 ? std::string{"their full size"}
+                                     : fmt::format("at most {} texels a side", limit));
+        astc_texture_limit = limit;
+    }
+}
+
 void TextureCacheRuntime::ReleaseFinishedTranscodes() {
     // Finished decode images wait for the next texture of their shape, up to this much memory.
     static constexpr u64 MaxFreeTranscodeBytes = u64{256} << 20;
@@ -2639,6 +2717,16 @@ void TextureCacheRuntime::ReleaseFinishedTranscodes() {
     }
     while (!pending_transcodes.empty() && scheduler.IsFree(pending_transcodes.front().tick)) {
         PendingTranscode& done = pending_transcodes.front();
+        if (transcode_timestamps && done.timing_slot != TranscodeTimingSlots) {
+            std::array<u64, 2> stamps{};
+            if (device.GetLogical().GetQueryResults(*transcode_timestamps, done.timing_slot * 2, 2,
+                                                    sizeof(stamps), stamps.data(), sizeof(u64),
+                                                    VK_QUERY_RESULT_64_BIT) == VK_SUCCESS &&
+                stamps[1] > stamps[0]) {
+                NoteTranscodeTime(static_cast<u64>(static_cast<double>(stamps[1] - stamps[0]) *
+                                                   device.GetTimestampPeriod() / 1000.0));
+            }
+        }
         const u64 bytes = decode_bytes(done);
         if (free_bytes + bytes <= MaxFreeTranscodeBytes) {
             done.unused_frames = 0;
@@ -2652,6 +2740,8 @@ void TextureCacheRuntime::ReleaseFinishedTranscodes() {
 void TextureCacheRuntime::TickFrame() {
     static constexpr u32 MAX_UNUSED_SCRATCH_FRAMES = 60;
     ReleaseFinishedTranscodes();
+    // Time passes for the limit to rise again with nothing left to decode.
+    NoteTranscodeTime(0);
     std::erase_if(free_transcodes, [](PendingTranscode& t) {
         return ++t.unused_frames > MAX_UNUSED_SCRATCH_FRAMES;
     });
@@ -4697,12 +4787,19 @@ void TextureCacheRuntime::TranscodeAstcToBcn(
             .levels = levels,
             .layers = layers,
             .unused_frames = 0,
+            .timing_slot = 0,
         };
         for (u32 level = 0; level < levels; ++level) {
             pending.views.push_back(
                 MakeStorageView(device.GetLogical(), level, *pending.image, DecodeFormat));
         }
     }
+    // Slots in use are few: the GPU is a few dozen submissions behind. One still in use goes
+    // untimed.
+    pending.timing_slot = pending_transcodes.size() < TranscodeTimingSlots
+                              ? next_timing_slot++ % TranscodeTimingSlots
+                              : TranscodeTimingSlots;
+    StampTranscode(pending.timing_slot, 0);
     astc_decoder_pass->AssembleInto(
         info, skip, image.guest_size_bytes,
         ASTCDecoderPass::Target{
@@ -4757,6 +4854,7 @@ void TextureCacheRuntime::TranscodeAstcToBcn(
         cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
                                0, barrier);
     });
+    StampTranscode(pending.timing_slot, 1);
     image.UploadMemory(output.buffer, output.offset, copies);
     pending.tick = scheduler.CurrentTick();
     pending_transcodes.push_back(std::move(pending));

@@ -773,6 +773,13 @@ FN_MAX_LIMIT_LIST
     }
 
     /// Returns true if vkResetQueryPool (host-side query reset) is supported.
+    /// Nanoseconds per timestamp tick, 0 when the graphics queue has no usable timestamps.
+    float GetTimestampPeriod() const {
+        return properties.properties.limits.timestampComputeAndGraphics
+                   ? properties.properties.limits.timestampPeriod
+                   : 0.f;
+    }
+
     bool IsHostQueryResetSupported() const {
         return features.host_query_reset.hostQueryReset != VK_FALSE;
     }
