@@ -28,7 +28,7 @@ If you're having issues with building, always consult that ebuild.
 
 macOS is largely untested. Expect crashes, significant Vulkan issues, and other fun stuff.
 
-Apple Silicon builds use Dynarmic's ARM64 JIT, not NCE. Hosts with pages larger than 4 KiB use the backing-buffer and software-page-table fallback instead of fastmem. MoltenVK does not support Vulkan sparse residency, so large images require ordinary allocations and can exceed available memory. Successful builds and packaged-binary startup checks do not establish game compatibility.
+Apple Silicon builds use Dynarmic's ARM64 JIT, not NCE. On hosts with pages larger than 4 KiB, fastmem only maps the host pages whose guest pages are contiguous, and the rest goes through the backing buffer and the software page table. MoltenVK does not support Vulkan sparse residency, so large images require ordinary allocations and can exceed available memory. Successful builds and packaged-binary startup checks do not establish game compatibility.
 
 ## OpenIndiana
 
