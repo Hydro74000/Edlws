@@ -16,7 +16,6 @@
 #include "qt_common/abstract/progress.h"
 #include "qt_common/qt_common.h"
 
-#include <JlCompress.h>
 #include <QFuture>
 #include <QFutureWatcher>
 #include <QtConcurrentRun>
@@ -198,9 +197,10 @@ QString UnzipFirmwareToTmp(const QString& location) {
     QString qCacheDir = QString::fromStdString(tmp.string());
 
     QFile zip(location);
+    QuaZip archive(&zip);
 
-    // TODO(crueter): use QtCompress
-    QStringList result = JlCompress::extractDir(&zip, qCacheDir);
+    QStringList result = QtCommon::Compress::extractDir(
+        archive, qCacheDir, [](std::size_t, std::size_t) { return true; });
     if (result.isEmpty()) {
         return QString();
     }

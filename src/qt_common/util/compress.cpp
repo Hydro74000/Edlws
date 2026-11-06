@@ -7,6 +7,8 @@
 #include <QDirIterator>
 #include <quazipfile.h>
 
+#include "common/logging.h"
+
 /** This is a modified version of JlCompress **/
 namespace QtCommon::Compress {
 
@@ -121,37 +123,28 @@ bool compressFile(QuaZip* zip, QString fileName, QString fileDest, const Options
         zip->getMode() != QuaZip::mdAdd)
         return false;
 
+    // A link is stored as what it points to: extractDir refuses links.
+    const QString source = QFileInfo(fileName).canonicalFilePath();
     QuaZipFile outFile(zip);
     if (options.getDateTime().isNull()) {
-        if (!outFile.open(QIODevice::WriteOnly, QuaZipNewInfo(fileDest, fileName), nullptr, 0,
+        if (!outFile.open(QIODevice::WriteOnly, QuaZipNewInfo(fileDest, source), nullptr, 0,
                           options.getCompressionMethod(), options.getCompressionLevel()))
             return false;
     } else {
-        if (!outFile.open(QIODevice::WriteOnly, QuaZipNewInfo(fileDest, fileName), nullptr, 0,
+        if (!outFile.open(QIODevice::WriteOnly, QuaZipNewInfo(fileDest, source), nullptr, 0,
                           options.getCompressionMethod(), options.getCompressionLevel()))
             return false;
     }
 
-    QFileInfo input(fileName);
-    if (quazip_is_symlink(input)) {
-        // Not sure if we should use any specialized codecs here.
-        // After all, a symlink IS just a byte array. And
-        // this is mostly for Linux, where UTF-8 is ubiquitous these days.
-        QString path = quazip_symlink_target(input);
-        QString relativePath = input.dir().relativeFilePath(path);
-        outFile.write(QFile::encodeName(relativePath));
-    } else {
-        QFile inFile;
-        inFile.setFileName(fileName);
-        if (!inFile.open(QIODevice::ReadOnly)) {
-            return false;
-        }
-        if (!copyData(inFile, outFile, total, progress, callback) ||
-            outFile.getZipError() != UNZ_OK) {
-            return false;
-        }
-        inFile.close();
+    QFile inFile;
+    inFile.setFileName(source);
+    if (!inFile.open(QIODevice::ReadOnly)) {
+        return false;
     }
+    if (!copyData(inFile, outFile, total, progress, callback) || outFile.getZipError() != UNZ_OK) {
+        return false;
+    }
+    inFile.close();
 
     outFile.close();
     return outFile.getZipError() == UNZ_OK;
@@ -268,8 +261,10 @@ bool extractFile(QuaZip* zip, QString fileName, QString fileDest, std::size_t to
     }
 
     if (info.isSymbolicLink()) {
-        QString target = QFile::decodeName(inFile.readAll());
-        return QFile::link(target, fileDest);
+        // An entry named after a link would pass the path check in extractDir and then write
+        // wherever it points. Skipping it would lose what it stood for, so the archive is refused.
+        LOG_ERROR(Frontend, "Symbolic link in archive: {}", fileDest.toStdString());
+        return false;
     }
 
     // Open resulting file
