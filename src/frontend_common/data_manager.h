@@ -15,6 +15,8 @@ const std::filesystem::path GetDataDir(DataDir dir, const std::string &user_id =
 const std::string GetDataDirString(DataDir dir, const std::string &user_id = "");
 
 u64 ClearDir(DataDir dir, const std::string &user_id = "");
+/// Where new contents wait to replace a directory's: see Common::FS::ReplaceDirContents.
+const std::filesystem::path StagingDir(DataDir dir, const std::string &user_id = "");
 std::string ReadableBytesSize(u64 size) noexcept;
 
 u64 DataDirSize(DataDir dir);

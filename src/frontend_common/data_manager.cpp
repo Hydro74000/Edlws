@@ -53,6 +53,11 @@ u64 ClearDir(DataDir dir, const std::string &user_id)
     return result;
 }
 
+const fs::path StagingDir(DataDir dir, const std::string &user_id)
+{
+    return GetDataDir(dir, user_id) / ".eden-staging";
+}
+
 std::string ReadableBytesSize(u64 size) noexcept {
     std::array<std::string_view, 6> const units{"B", "KB", "MB", "GB", "TB", "PB"};
     u64 const base = 1000;

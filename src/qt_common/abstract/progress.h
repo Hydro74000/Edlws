@@ -22,6 +22,10 @@ public:
     virtual void setAutoClose(bool autoClose) = 0;
     virtual void setAutoReset(bool autoReset) = 0;
 
+signals:
+    /// On the GUI thread, for work elsewhere that can't call wasCanceled().
+    void canceled();
+
 public slots:
     virtual void setTitle(QString title) = 0;
     virtual void setLabelText(QString text) = 0;

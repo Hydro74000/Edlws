@@ -31,6 +31,7 @@ WidgetsProgressDialog::WidgetsProgressDialog(const QString& labelText,
     m_dialog->setAutoReset(false);
     m_dialog->setMinimumDuration(100);
     m_dialog->setWindowModality(Qt::WindowModal);
+    connect(m_dialog, &QProgressDialog::canceled, this, &QtProgressDialog::canceled);
 }
 
 bool WidgetsProgressDialog::wasCanceled() const {

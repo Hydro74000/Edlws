@@ -277,6 +277,19 @@ bool RemoveDir(const Path& path) {
  */
 bool RemoveDirRecursively(const std::filesystem::path& path);
 
+/**
+ * Replaces the contents of a directory with those of staging, a directory inside it, and removes
+ * staging. Entries move within the directory, as it can be a mount point: nothing beside it is sure
+ * to be on its volume, or writable. On failure the old contents are back and staging is whole.
+ *
+ * @param dir Directory to replace the contents of
+ * @param staging Direct child of dir holding the new contents
+ *
+ * @returns True if the contents were replaced, false otherwise.
+ */
+[[nodiscard]] bool ReplaceDirContents(const std::filesystem::path& dir,
+                                      const std::filesystem::path& staging);
+
 #ifdef _WIN32
 template <typename Path>
 bool RemoveDirRecursively(const Path& path) {

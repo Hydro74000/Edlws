@@ -6,6 +6,7 @@
 #include "qt_common/util/game.h"
 
 #include "common/fs/fs.h"
+#include "common/fs/path_util.h"
 #include "core/hle/service/acc/profile_manager.h"
 #include "frontend_common/content_manager.h"
 #include "frontend_common/data_manager.h"
@@ -16,6 +17,9 @@
 #include "qt_common/abstract/progress.h"
 #include "qt_common/qt_common.h"
 
+#include <atomic>
+#include <filesystem>
+#include <memory>
 #include <QFuture>
 #include <QFutureWatcher>
 #include <QtConcurrentRun>
@@ -26,6 +30,25 @@ namespace {
 // Empty directories and archives report a total of 0.
 int Percent(size_t processed_size, size_t total_size) {
     return total_size != 0 ? static_cast<int>((processed_size * 100) / total_size) : 100;
+}
+
+// A progress callback for another thread: only the GUI thread may touch the dialog.
+auto WorkerProgress(QtCommon::Frontend::QtProgressDialog* progress) {
+    struct State {
+        std::atomic_bool canceled{};
+        std::atomic_int percent{-1};
+    };
+    auto state = std::make_shared<State>();
+    QObject::connect(progress, &QtCommon::Frontend::QtProgressDialog::canceled, progress,
+                     [state] { state->canceled = true; });
+    return [progress, state](size_t total_size, size_t processed_size) {
+        const int percent = Percent(processed_size, total_size);
+        if (state->percent.exchange(percent) != percent) {
+            QMetaObject::invokeMethod(progress, "setValue", Qt::QueuedConnection,
+                                      Q_ARG(int, percent));
+        }
+        return !state->canceled;
+    };
 }
 } // namespace
 
@@ -389,12 +412,7 @@ void ExportDataDir(FrontendCommon::DataManager::DataDir data_dir, const std::str
     progress->setTitle(tr("Exporting"));
     progress->show();
 
-    auto progress_callback = [=](size_t total_size, size_t processed_size) {
-        QMetaObject::invokeMethod(
-            progress, "setValue", Qt::DirectConnection,
-            Q_ARG(int, Percent(processed_size, total_size)));
-        return !progress->wasCanceled();
-    };
+    auto progress_callback = WorkerProgress(progress);
 
     QFuture<bool> future = QtConcurrent::run([=]() {
         return QtCommon::Compress::compressDir(zip_dump_location, QString::fromStdString(dir),
@@ -404,11 +422,13 @@ void ExportDataDir(FrontendCommon::DataManager::DataDir data_dir, const std::str
     QFutureWatcher<bool>* watcher = new QFutureWatcher<bool>(rootObject);
 
     QObject::connect(watcher, &QFutureWatcher<bool>::finished, rootObject, [=]() {
+        // Closing the dialog counts as cancelling it.
+        const bool canceled = progress->wasCanceled();
         progress->close();
 
         if (watcher->result()) {
             Information(tr("Exported Successfully"), tr("Data was exported successfully."));
-        } else if (progress->wasCanceled()) {
+        } else if (canceled) {
             Information(tr("Export Cancelled"), tr("Export was cancelled by the user."));
         } else {
             Critical(
@@ -452,53 +472,50 @@ void ImportDataDir(FrontendCommon::DataManager::DataDir data_dir, const std::str
     progress->setTitle(tr("Importing"));
     progress->show();
 
-    // to prevent GUI mangling we have to run this in a thread as well
-    QFuture<bool> delete_future = QtConcurrent::run([=]() {
-        FrontendCommon::DataManager::ClearDir(data_dir, user_id);
-        return !progress->wasCanceled();
+    auto progress_callback = WorkerProgress(progress);
+
+    // The current data goes last: until then a bad archive, a full disk or Cancel leave it alone.
+    QFuture<bool> future = QtConcurrent::run([=]() {
+        namespace fs = std::filesystem;
+        const fs::path staging = FrontendCommon::DataManager::StagingDir(data_dir, user_id);
+        std::error_code ec;
+        fs::remove_all(staging, ec);
+        fs::create_directories(staging, ec);
+        const bool imported =
+            !QtCommon::Compress::extractDir(
+                 zip_dump_location, QString::fromStdString(Common::FS::PathToUTF8String(staging)),
+                 progress_callback)
+                 .empty() &&
+            Common::FS::ReplaceDirContents(staging.parent_path(), staging);
+        fs::remove_all(staging, ec);
+        return imported;
     });
 
-    QFutureWatcher<bool>* delete_watcher = new QFutureWatcher<bool>(rootObject);
-    delete_watcher->setFuture(delete_future);
+    QFutureWatcher<bool>* watcher = new QFutureWatcher<bool>(rootObject);
 
-    QObject::connect(delete_watcher, &QFutureWatcher<bool>::finished, rootObject, [=]() {
-        auto progress_callback = [=](size_t total_size, size_t processed_size) {
-            QMetaObject::invokeMethod(
-                progress, "setValue", Qt::DirectConnection,
-                Q_ARG(int, Percent(processed_size, total_size)));
-            return !progress->wasCanceled();
-        };
+    QObject::connect(watcher, &QFutureWatcher<bool>::finished, rootObject, [=]() {
+        // Closing the dialog counts as cancelling it.
+        const bool canceled = progress->wasCanceled();
+        progress->close();
 
-        QFuture<bool> future = QtConcurrent::run([=]() {
-            return !QtCommon::Compress::extractDir(zip_dump_location, QString::fromStdString(dir),
-                                                   progress_callback)
-                        .empty();
-        });
+        // this sucks
+        if (watcher->result()) {
+            Information(tr("Imported Successfully"), tr("Data was imported successfully."));
+        } else if (canceled) {
+            Information(tr("Import Cancelled"), tr("Import was cancelled by the user."));
+        } else {
+            Critical(tr("Import Failed"),
+                     tr("Ensure you have read permissions on the targeted directory and try "
+                        "again."));
+        }
 
-        QFutureWatcher<bool>* watcher = new QFutureWatcher<bool>(rootObject);
-
-        QObject::connect(watcher, &QFutureWatcher<bool>::finished, rootObject, [=]() {
-            progress->close();
-
-            // this sucks
-            if (watcher->result()) {
-                Information(tr("Imported Successfully"), tr("Data was imported successfully."));
-            } else if (progress->wasCanceled()) {
-                Information(tr("Import Cancelled"), tr("Import was cancelled by the user."));
-            } else {
-                Critical(tr("Import Failed"),
-                         tr("Ensure you have read permissions on the targeted directory and try "
-                            "again."));
-            }
-
-            progress->deleteLater();
-            watcher->deleteLater();
-            if (callback)
-                callback();
-        });
-
-        watcher->setFuture(future);
+        progress->deleteLater();
+        watcher->deleteLater();
+        if (callback)
+            callback();
     });
+
+    watcher->setFuture(future);
 }
 
 bool CheckKeys() {

@@ -4,6 +4,11 @@
 // SPDX-FileCopyrightText: Copyright 2021 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
+#include <initializer_list>
+#include <system_error>
+#include <vector>
+
 #include "common/fs/file.h"
 #include "common/fs/fs.h"
 #ifdef __ANDROID__
@@ -363,6 +368,59 @@ bool RemoveDirContentsRecursively(const fs::path& path) {
               "Successfully removed all the contents of the directory at path={}",
               PathToUTF8String(path));
 
+    return true;
+}
+
+namespace {
+
+// Moves what from holds to to, except the children named in keep. All or nothing.
+bool MoveDirEntries(const fs::path& from, const fs::path& to,
+                    std::initializer_list<fs::path> keep = {}) {
+    std::error_code ec;
+    std::vector<fs::path> names;
+    for (fs::directory_iterator it{from, ec}, end; !ec && it != end; it.increment(ec)) {
+        fs::path name = it->path().filename();
+        if (std::find(keep.begin(), keep.end(), name) == keep.end()) {
+            names.push_back(std::move(name));
+        }
+    }
+    size_t moved = 0;
+    while (!ec && moved < names.size()) {
+        fs::rename(from / names[moved], to / names[moved], ec);
+        moved += ec ? 0 : 1;
+    }
+    if (!ec) {
+        return true;
+    }
+    while (moved != 0) {
+        --moved;
+        std::error_code ignored;
+        fs::rename(to / names[moved], from / names[moved], ignored);
+    }
+    return false;
+}
+
+} // Anonymous namespace
+
+bool ReplaceDirContents(const fs::path& dir, const fs::path& staging) {
+    fs::path old = staging;
+    old += ".old";
+    std::error_code ec;
+    fs::remove_all(old, ec);
+    if (!fs::create_directory(old, ec)) {
+        return false;
+    }
+    if (!MoveDirEntries(dir, old, {old.filename(), staging.filename()})) {
+        fs::remove(old, ec);
+        return false;
+    }
+    if (!MoveDirEntries(staging, dir)) {
+        MoveDirEntries(old, dir);
+        fs::remove(old, ec);
+        return false;
+    }
+    fs::remove_all(old, ec);
+    fs::remove_all(staging, ec);
     return true;
 }
 
