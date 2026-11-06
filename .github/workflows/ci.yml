@@ -1,16 +1,17 @@
 name: ci
 
-# Builds Edelweiss with its tests and runs them. release-binaries builds the packages without
-# tests; this is what checks a change, on the platforms that have no local bench here too.
+# Builds Edelweiss with its tests and runs them, on the platforms that have no local bench here too.
+# release-binaries calls this for every commit that changes a binary, so a push only starts it on
+# its own for what release-binaries leaves out.
 on:
   workflow_dispatch:
+  workflow_call:
   push:
     branches:
       - edlws
-    paths-ignore:
-      - "**.md"
-      - "docs/**"
-      - ".github/ISSUE_TEMPLATE/**"
+    paths:
+      - "src/tests/**"
+      - ".github/workflows/ci.yml"
   pull_request:
     branches:
       - edlws
@@ -22,9 +23,10 @@ on:
 permissions:
   contents: read
 
-# A newer push makes the checks of the last one pointless.
+# A newer push makes the checks of the last one pointless. The workflow's name keeps runs called by
+# release-binaries, which holds its own queue, out of the way of the others.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -130,7 +132,7 @@ jobs:
       - name: Build
         shell: bash
         run: |
-          cmake --build build/ci --target yuzu-cmd tests --parallel
+          cmake --build build/ci --target yuzu yuzu-cmd tests --parallel
           ccache --show-stats
 
       - name: Run the tests

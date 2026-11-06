@@ -559,11 +559,18 @@ jobs:
           compression-level: 0
           retention-days: 7
 
-  # Publishes every binary as a GitHub pre-release once every platform built: on pushes to edlws,
-  # and on manual runs unless "Publish the binaries as a GitHub release" is unticked.
+  # The packages build without tests: these run them on the same commit, before anything goes out.
+  tests:
+    name: Tests
+    if: github.event_name == 'push' || inputs.publish_release
+    uses: ./.github/workflows/ci.yml
+
+  # Publishes every binary as a GitHub pre-release once every platform built and the tests passed:
+  # on pushes to edlws, and on manual runs unless "Publish the binaries as a GitHub release" is
+  # unticked.
   release:
     name: Publish release
-    needs: build
+    needs: [build, tests]
     if: github.event_name == 'push' || inputs.publish_release
     runs-on: ubuntu-24.04
     permissions:
