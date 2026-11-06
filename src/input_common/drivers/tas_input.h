@@ -117,6 +117,9 @@ public:
      */
     void SaveRecording(bool overwrite_file);
 
+    /// Writes what was recorded so far to the script file, and keeps recording.
+    void CheckpointRecording();
+
     /**
      * Returns the current status values of TAS playback/recording
      * @returns A Tuple of

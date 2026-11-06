@@ -45,7 +45,12 @@
 #include "core/hle/service/filesystem/filesystem.h"
 #include "core/loader/loader.h"
 #include "frontend_common/config.h"
+#include "common/fs/fs.h"
+#include "common/fs/path_util.h"
+#include "hid_core/frontend/emulated_controller.h"
+#include "hid_core/hid_core.h"
 #include "input_common/drivers/keyboard.h"
+#include "input_common/drivers/tas_input.h"
 #include "input_common/main.h"
 #include "network/network.h"
 #include "sdl_config.h"
@@ -647,9 +652,59 @@ static void RunKeyScript(InputCommon::InputSubsystem& input_subsystem) {
     }
 }
 
+// EDEN_NX2_TAS=record writes what the first player does, frame by frame, to the TAS script
+// (tas/script0-1.txt), and EDEN_NX2_TAS=play replays it. By presented frame, so a replay holds on
+// a machine of another speed. The script is saved as it grows: test runs end killed.
+static void RunTas(SdlState& state) {
+    static const std::string mode = [] {
+        const char* value = std::getenv("EDEN_NX2_TAS");
+        return std::string{value != nullptr ? value : ""};
+    }();
+    if (mode.empty()) {
+        return;
+    }
+    static u64 last_frame{};
+    const u64 frame = Core::g_nx2_present_count.load();
+    if (frame == last_frame) {
+        return;
+    }
+    auto* const tas = state.input_subsystem.GetTas();
+    if (last_frame == 0) {
+        Settings::values.tas_enable = true;
+        if (mode == "record") {
+            // Nothing makes it in a portable data folder.
+            void(Common::FS::CreateDirs(Common::FS::GetEdenPath(Common::FS::EdenPath::TASDir)));
+            tas->Record();
+        } else {
+            tas->StartStop();
+        }
+    }
+    if (mode == "record") {
+        auto& hid_core = state.system.HIDCore();
+        const auto* const controller = hid_core.GetEmulatedController(hid_core.GetFirstNpadId());
+        u64 buttons = 0;
+        std::size_t index = 0;
+        for (const auto& button : controller->GetButtonsValues()) {
+            buttons |= button.value ? 1ULL << index : 0;
+            ++index;
+        }
+        const auto sticks = controller->GetSticks();
+        tas->RecordInput(buttons, {sticks.left.x / 32767.f, sticks.left.y / 32767.f},
+                         {sticks.right.x / 32767.f, sticks.right.y / 32767.f});
+    }
+    for (u64 step = last_frame; step < frame; ++step) {
+        tas->UpdateThread();
+    }
+    if (mode == "record" && last_frame / 300 != frame / 300) {
+        tas->CheckpointRecording();
+    }
+    last_frame = frame;
+}
+
 extern "C" SDL_AppResult SDL_AppIterate(void *appstate) {
     SdlState *state = (SdlState *)appstate;
     RunKeyScript(state->input_subsystem);
+    RunTas(*state);
     if (state->emu_window) {
         state->emu_window->ApplyPendingTitle();
     }

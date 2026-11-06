@@ -329,6 +329,12 @@ bool Tas::Record() {
     return is_recording;
 }
 
+void Tas::CheckpointRecording() {
+    if (!record_commands.empty()) {
+        WriteTasFile(u8"script0-1.txt");
+    }
+}
+
 void Tas::SaveRecording(bool overwrite_file) {
     if (is_recording) {
         return;
