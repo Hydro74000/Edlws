@@ -259,16 +259,22 @@ void TextureCache<P>::RunGarbageCollector() {
 
 template <class P>
 void TextureCache<P>::ApplyThresholdOverrides(bool log) {
-    // On every GPU: past what a frame needs, more device memory only keeps the textures of earlier
-    // scenes (title 1 filled 6.7 GB of an 8 GB card and draws its races in ~5 GB), so collect from
-    // MaxCriticalMemory on rather than near the card's budget.
+    // A full card pages textures out (title 1 at 6.7 GB of an 8 GB card: twice the long frames of
+    // 5.6 GB), so leave 15 % of the budget free, 2 GiB at least. On larger cards that keeps
+    // what the 5 GiB of a fixed limit evicted, then decoded again within seconds.
     // A GPU sharing the RAM goes by free RAM instead (LimitBySystemMemory).
     bool follows_free_memory = false;
     if constexpr (requires { runtime.SystemMemoryHeadroom(); }) {
         follows_free_memory = runtime.SystemMemoryHeadroom().has_value();
     }
     if (!follows_free_memory) {
-        critical_memory = (std::min)(critical_memory, MaxCriticalMemory);
+        u64 limit = MinCriticalMemoryLimit;
+        if constexpr (requires { runtime.GetDeviceMemoryBudget(); }) {
+            const u64 budget = runtime.GetDeviceMemoryBudget();
+            const u64 reserve = (std::max)(budget * 15 / 100, u64{2_GiB});
+            limit = (std::max)(limit, budget - (std::min)(budget, reserve));
+        }
+        critical_memory = (std::min)(critical_memory, limit);
     }
     expected_memory =
         (std::min)(expected_memory, critical_memory - (std::min)(critical_memory, u64{768_MiB}));

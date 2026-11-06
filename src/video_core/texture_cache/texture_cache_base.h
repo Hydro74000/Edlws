@@ -148,9 +148,9 @@ class TextureCache : public VideoCommon::ChannelSetupCaches<TextureCacheChannelI
 
     static constexpr s64 DEFAULT_EXPECTED_MEMORY = 1_GiB + 125_MiB;
     static constexpr s64 DEFAULT_CRITICAL_MEMORY = 1_GiB + 625_MiB;
-    /// The most device memory the collector lets the cache fill before it collects in earnest,
-    /// on every GPU (ApplyThresholdOverrides).
-    static constexpr u64 MaxCriticalMemory = 5_GiB;
+    /// The limit on a dedicated GPU follows its budget, but never drops below this: cards under
+    /// 8 GB keep what they have (ApplyThresholdOverrides).
+    static constexpr u64 MinCriticalMemoryLimit = 5_GiB;
     /// The lowest LimitBySystemMemory takes the thresholds to: under it, frames evict each other.
     static constexpr u64 MinLimitedCriticalMemory = 3_GiB;
     static constexpr size_t GC_EMERGENCY_COUNTS = 2;
