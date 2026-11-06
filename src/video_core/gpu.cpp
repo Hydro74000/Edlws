@@ -31,6 +31,7 @@
 #include "video_core/engines/maxwell_3d.h"
 #include "video_core/engines/maxwell_dma.h"
 #include "video_core/gpu.h"
+#include "video_core/gpu_split.h"
 #include "video_core/gpu_thread.h"
 #include "video_core/host1x/host1x.h"
 #include "video_core/host1x/syncpoint_manager.h"
@@ -513,6 +514,11 @@ bool GPU::IsAsync() const {
 
 bool GPU::HasSuspendedChannels() const {
     return impl->scheduler.HasPendingChannelsAnyThread();
+}
+
+bool GPU::WaitsOnCpu() const {
+    return impl->gpu_thread.FrontIdle() && VideoCommon::GpuSplit::Get().BackIdle() &&
+           !impl->renderer->ReadRasterizer()->HostBusy();
 }
 
 bool GPU::UseNvdec() const {

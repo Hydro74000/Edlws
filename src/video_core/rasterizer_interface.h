@@ -234,6 +234,11 @@ public:
     /// Register the address as a Transform Feedback Object
     virtual void RegisterTransformFeedback(GPUVAddr tfb_object_addr) {}
 
+    /// Any thread: whether the host GPU still runs submitted work.
+    [[nodiscard]] virtual bool HostBusy() {
+        return false;
+    }
+
     /// Returns true when the rasterizer has Draw Transform Feedback capabilities
     virtual bool HasDrawTransformFeedback() {
         return false;

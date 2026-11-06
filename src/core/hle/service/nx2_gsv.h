@@ -1753,6 +1753,7 @@ private:
         }
         const auto entered = std::chrono::steady_clock::now();
         NoteFrameTime(entered);
+        ChooseFrameWait();
         m_frame_patience = FramePatience();
         if (frames_ahead == 1 || (frames_ahead == -1 && !WaitForFrame(~w[22], w[24], true))) {
             LOG_DEBUG(Service, "nx2:vi2 present #{} fence ({}, {:#x}), waiting for ({}, {:#x}); now {:#x}",
@@ -1842,9 +1843,24 @@ private:
     } m_stats{};
     u32 m_previous_fence_id{~0U}; // none yet (WaitForFrame ignores ids >= 192)
     std::chrono::steady_clock::time_point m_last_frame_start{};
+    std::chrono::microseconds m_last_frame{};
     std::chrono::microseconds m_smoothed_frame{};
     std::chrono::microseconds m_target_frame{};
     std::chrono::microseconds m_frame_patience{3'000};
+
+    // See ChooseFrameWait.
+    enum class FrameTrial : u8 { Pause, Ahead, Waiting };
+    static constexpr u32 FrameTrialSettle = 4;
+    static constexpr u32 FrameTrialMeasured = 24;
+    static constexpr u32 FrameTrialFirstPause = 300;
+    FrameTrial m_frame_trial{FrameTrial::Pause};
+    u32 m_frame_trial_presents{};
+    u32 m_frame_trial_pause{FrameTrialFirstPause};
+    std::array<std::chrono::microseconds, FrameTrialMeasured> m_frame_trial_frames{};
+    std::chrono::microseconds m_frame_ahead{};
+    std::chrono::microseconds m_frame_decided{};
+    bool m_wait_for_frame{};
+    bool m_frame_trial_waited{};
     u32 m_previous_fence_value{};
 
     // The console flips one frame per 60 Hz vblank and keeps the rest queued, so a game can't
@@ -1910,11 +1926,74 @@ private:
         // as that much.
         constexpr std::chrono::microseconds MaxFrameSample{100'000};
         if (m_last_frame_start != std::chrono::steady_clock::time_point{}) {
-            const auto frame = std::chrono::duration_cast<std::chrono::microseconds>(
+            m_last_frame = std::chrono::duration_cast<std::chrono::microseconds>(
                 now - m_last_frame_start);
-            m_smoothed_frame += ((std::min)(frame, MaxFrameSample) - m_smoothed_frame) / 8;
+            m_smoothed_frame += ((std::min)(m_last_frame, MaxFrameSample) - m_smoothed_frame) / 8;
         }
         m_last_frame_start = now;
+    }
+
+    // Waiting for its frame at each present keeps the game from writing over what the GPU hasn't
+    // read yet (see FramePatience), but stops the CPU and the GPU from overlapping: a Vega's race
+    // takes 47 ms a frame either way, a GTX 1070's goes from 26 to 36 ms. How late frames are
+    // doesn't tell which, and a game limited by the CPU would mislead it, so time both on the
+    // game itself: the median frame over a few presents each way, then wait unless that is more
+    // than 5 % slower. Again later, less often while the answer stays the same, and sooner if
+    // frames change by a quarter. EDEN_NX2_FRAME_TRIAL=0 never waits.
+    void ChooseFrameWait() {
+        constexpr u32 LongestPause = 4800;
+        constexpr u32 FramesSettled = 32;
+        constexpr u32 LeastPause = 120;
+        static const bool enabled = [] {
+            const char* value = std::getenv("EDEN_NX2_FRAME_TRIAL");
+            return value == nullptr || value[0] != '0';
+        }();
+        if (!enabled) {
+            return;
+        }
+        ++m_frame_trial_presents;
+        if (m_frame_trial == FrameTrial::Pause) {
+            if (m_frame_trial_presents == FramesSettled) {
+                m_frame_decided = m_smoothed_frame;
+            }
+            const auto moved = m_smoothed_frame - m_frame_decided;
+            const bool frames_moved = m_frame_trial_presents >= LeastPause &&
+                                      (moved < -m_frame_decided / 4 || moved > m_frame_decided / 4);
+            if (m_frame_trial_presents >= m_frame_trial_pause || frames_moved) {
+                m_frame_trial = FrameTrial::Ahead;
+                m_wait_for_frame = false;
+                m_frame_trial_presents = 0;
+            }
+            return;
+        }
+        if (m_frame_trial_presents <= FrameTrialSettle) {
+            return;
+        }
+        m_frame_trial_frames[m_frame_trial_presents - FrameTrialSettle - 1] = m_last_frame;
+        if (m_frame_trial_presents < FrameTrialSettle + FrameTrialMeasured) {
+            return;
+        }
+        const auto median = m_frame_trial_frames.begin() + FrameTrialMeasured / 2;
+        std::nth_element(m_frame_trial_frames.begin(), median, m_frame_trial_frames.end());
+        m_frame_trial_presents = 0;
+        if (m_frame_trial == FrameTrial::Ahead) {
+            m_frame_ahead = *median;
+            m_frame_trial = FrameTrial::Waiting;
+            m_wait_for_frame = true;
+            return;
+        }
+        const bool wait = *median * 20 <= m_frame_ahead * 21;
+        m_frame_trial_pause = wait == m_frame_trial_waited
+                                  ? (std::min)(m_frame_trial_pause * 2, LongestPause)
+                                  : FrameTrialFirstPause;
+        if (wait != m_frame_trial_waited) {
+            LOG_INFO(Service, "nx2:vi2 presents {} their frame: {} us waiting, {} us ahead",
+                     wait ? "wait for" : "no longer wait for", median->count(),
+                     m_frame_ahead.count());
+        }
+        m_frame_trial_waited = wait;
+        m_wait_for_frame = wait;
+        m_frame_trial = FrameTrial::Pause;
     }
 
     // How long a present keeps waiting for its frame with a channel suspended. Title 1's GPU can
@@ -1924,9 +2003,14 @@ private:
     // keeping up, the wait only costs speed (a GTX 1070 lost 13% to 8 ms). On one far behind the
     // pace the game asks for, the GPU is the limit and it costs little: this grows with the
     // square of how late frames are, from nothing on time to nearly all of the delay.
-    // EDEN_NX2_FRAME_PATIENCE_PERCENT scales it.
+    // EDEN_NX2_FRAME_PATIENCE_PERCENT scales it. Presents that wait for their frame
+    // (ChooseFrameWait) stop once the GPU can't move: this then only bounds a GPU that stays busy.
     std::chrono::microseconds FramePatience() const {
         constexpr std::chrono::microseconds Least{3'000};
+        if (m_wait_for_frame) {
+            return std::clamp(m_smoothed_frame * 4, std::chrono::microseconds{100'000},
+                              std::chrono::microseconds{500'000});
+        }
         static const long percent = [] {
             const char* value = std::getenv("EDEN_NX2_FRAME_PATIENCE_PERCENT");
             return value != nullptr ? std::strtol(value, nullptr, 10) : 100L;
@@ -1972,12 +2056,17 @@ private:
             // Title 1's channels resume and suspend again while they wait on this thread, so any
             // suspension counts, not only an unbroken one.
             bool gpu_waited = false;
+            // Twice in a row: the last fence may be on its way from the host GPU.
+            u32 stalled = 0;
             while (!wake->done && system.IsPoweredOn() &&
                    std::chrono::steady_clock::now() < deadline) {
                 if (unless_gpu_waits) {
                     gpu_waited |= system.GPU().HasSuspendedChannels();
-                    if (gpu_waited &&
-                        std::chrono::steady_clock::now() - start > m_frame_patience) {
+                    stalled = m_wait_for_frame && gpu_waited && system.GPU().WaitsOnCpu()
+                                  ? stalled + 1
+                                  : 0;
+                    if (stalled == 2 || (gpu_waited && std::chrono::steady_clock::now() - start >
+                                                           m_frame_patience)) {
                         return false;
                     }
                 }

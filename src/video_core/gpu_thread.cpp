@@ -64,12 +64,14 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
             Profile::Report();
             split.MaybeStart(system);
             if (scheduler.HasPendingChannels()) {
+                state.front_idle.store(false, std::memory_order_release);
                 // Suspended channels wait on semaphores the CPU releases: poll them meanwhile.
                 {
                     Profile::Scope scope{Profile::Zone::ResumePending};
                     scheduler.ResumePending(system.GPU());
                 }
                 if (!state.queue.TryPop(next)) {
+                    state.front_idle.store(true, std::memory_order_release);
                     // The CPU usually releases the semaphore soon after: poll for half a
                     // millisecond before sleeping, or every wait also waits out a host sleep
                     // (title 1 waits ~25 times a second).
@@ -84,8 +86,10 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
                 }
             } else {
                 Profile::Scope scope{Profile::Zone::Idle};
+                state.front_idle.store(true, std::memory_order_release);
                 state.queue.PopWait(next, stop_token);
             }
+            state.front_idle.store(false, std::memory_order_release);
             if (stop_token.stop_requested()) {
                 break;
             }

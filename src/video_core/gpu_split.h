@@ -70,6 +70,12 @@ public:
     [[nodiscard]] bool BackRunning() const {
         return back_running.load(std::memory_order_acquire);
     }
+    /// Any thread: whether the back ran all it was sent and submitted it.
+    [[nodiscard]] bool BackIdle() const {
+        return consumed.load(std::memory_order_acquire) ==
+                   published.load(std::memory_order_acquire) &&
+               back_quiet.load(std::memory_order_acquire);
+    }
     /// Any thread: has the back call the idle hook soon, between entries or at once if it sleeps.
     void RequestIdleHook() {
         hook_requested.store(true, std::memory_order_seq_cst);

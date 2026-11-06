@@ -1452,6 +1452,12 @@ bool RasterizerVulkan::AccelerateConditionalRendering() {
     return query_cache.AccelerateHostConditionalRendering();
 }
 
+bool RasterizerVulkan::HostBusy() {
+    auto& semaphore = scheduler.GetMasterSemaphore();
+    semaphore.Refresh();
+    return !semaphore.IsFree(semaphore.CurrentTick() - 1);
+}
+
 bool RasterizerVulkan::HasDrawTransformFeedback() {
     return device.IsTransformFeedbackDrawSupported();
 }

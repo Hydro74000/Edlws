@@ -107,6 +107,7 @@ struct SynchState final {
     CommandQueue queue;
     u64 last_fence{};
     std::atomic<u64> signaled_fence{};
+    std::atomic<bool> front_idle{};
     std::condition_variable_any cv;
 };
 
@@ -138,6 +139,11 @@ public:
     void Run(std::function<void()>&& func, bool is_async, bool before_later_reads = false);
 
     void NotifyShutdown();
+
+    /// Any thread: whether the GPU thread has nothing to run right now.
+    [[nodiscard]] bool FrontIdle() const {
+        return state.front_idle.load(std::memory_order_acquire);
+    }
 
 private:
     /// Pushes a command to be executed by the GPU thread
