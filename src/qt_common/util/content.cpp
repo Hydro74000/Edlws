@@ -127,22 +127,28 @@ void InstallFirmware(const QString& location, bool recursive) {
         return;
     }
 
-    // Locate and erase the content of nand/system/Content/registered/*.nca, if any.
-    auto sysnand_content_vdir = system->GetFileSystemController().GetSystemNANDContentDirectory();
-    if (sysnand_content_vdir->IsWritable() &&
-        !sysnand_content_vdir->CleanSubdirectoryRecursive("registered")) {
-        result = FirmwareInstallResult::FailedDelete;
-        icon = QtCommon::Frontend::Icon::Critical;
+    // The new firmware waits inside nand/system/Contents/registered and replaces what's there once
+    // complete: a failed copy or Cancel leave the installed one, and the games that need it, alone.
+    namespace DataManager = FrontendCommon::DataManager;
+    const auto staging_path = DataManager::StagingDir(DataManager::DataDir::SysNand);
+    std::error_code ec;
+    std::filesystem::remove_all(staging_path, ec);
+    auto staging_vdir = vfs->CreateDirectory(Common::FS::PathToUTF8String(staging_path),
+                                             FileSys::OpenMode::ReadWrite);
+
+    const auto Fail = [&](FirmwareInstallResult failure, QtCommon::Frontend::Icon failure_icon) {
+        std::filesystem::remove_all(staging_path, ec);
+        result = failure;
+        icon = failure_icon;
         ShowMessage();
+    };
+
+    if (staging_vdir == nullptr) {
+        Fail(FirmwareInstallResult::FailedCopy, QtCommon::Frontend::Icon::Critical);
         return;
     }
 
-    LOG_INFO(Frontend,
-             "Cleaned nand/system/Content/registered folder in preparation for new firmware.");
-
     callback(100, 20);
-
-    auto firmware_vdir = sysnand_content_vdir->GetDirectoryRelative("registered");
 
     bool success = true;
     int i = 0;
@@ -151,26 +157,29 @@ void InstallFirmware(const QString& location, bool recursive) {
         auto firmware_src_vfile =
             vfs->OpenFile(firmware_src_path.generic_string(), FileSys::OpenMode::Read);
         auto firmware_dst_vfile =
-            firmware_vdir->CreateFileRelative(firmware_src_path.filename().string());
+            staging_vdir->CreateFileRelative(firmware_src_path.filename().string());
 
-        if (!VfsRawCopy(firmware_src_vfile, firmware_dst_vfile)) {
+        // A file that can't be read still opens here, and copies fine as an empty one.
+        if (!VfsRawCopy(firmware_src_vfile, firmware_dst_vfile) ||
+            firmware_dst_vfile->GetSize() != Common::FS::GetSize(firmware_src_path)) {
             LOG_ERROR(Frontend, "Failed to copy firmware file {} to {} in registered folder!",
                       firmware_src_path.generic_string(), firmware_src_path.filename().string());
             success = false;
         }
 
         if (callback(100, 20 + static_cast<int>(((i) / static_cast<float>(out.size())) * 70.0))) {
-            result = FirmwareInstallResult::FailedCorrupted;
-            icon = QtCommon::Frontend::Icon::Warning;
-            ShowMessage();
+            Fail(FirmwareInstallResult::FailedCorrupted, QtCommon::Frontend::Icon::Warning);
             return;
         }
     }
 
     if (!success) {
-        result = FirmwareInstallResult::FailedCopy;
-        icon = QtCommon::Frontend::Icon::Critical;
-        ShowMessage();
+        Fail(FirmwareInstallResult::FailedCopy, QtCommon::Frontend::Icon::Critical);
+        return;
+    }
+
+    if (!Common::FS::ReplaceDirContents(staging_path.parent_path(), staging_path)) {
+        Fail(FirmwareInstallResult::FailedDelete, QtCommon::Frontend::Icon::Critical);
         return;
     }
 
