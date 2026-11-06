@@ -996,10 +996,11 @@ bool KeplerCompute::UpscaleInsteadOfNativeProgram() {
         .src_x1 = static_cast<s32>(input->Width()),
         .src_y1 = static_cast<s32>(input->Height()),
     };
-    // Debug: does the input hold anything? Download it once and count non-zero words.
+    // Debug, EDEN_NX2_SAMPLE_AT=<n>: does the input hold anything? Download it at the nth upscale
+    // and count non-zero words.
     static const u32 sample_at = [] {
         const char* value = std::getenv("EDEN_NX2_SAMPLE_AT");
-        return value ? static_cast<u32>(std::strtoul(value, nullptr, 10)) : 20U;
+        return value ? static_cast<u32>(std::strtoul(value, nullptr, 10)) : ~0U;
     }();
     if (static u32 sampled{}; sampled++ == sample_at) {
         const auto sample = [&](const Texture::TICEntry& tic) {
@@ -1020,27 +1021,6 @@ bool KeplerCompute::UpscaleInsteadOfNativeProgram() {
         };
         sample(*input);
         sample(*output);
-        // Every 2560x1440 target the in-game passes draw to (from EDEN_NX2_RT_TRACE).
-        for (const GPUVAddr address : {0x8116a03000ULL, 0x8117ae5000ULL, 0x8114b62000ULL,
-                                       0x8115a63000ULL, 0x8117904000ULL, 0x8114a02000ULL}) {
-            Texture::TICEntry fake = *input;
-            const u64 size = 2560ULL * 1440 * 4;
-            if (const auto device = memory_manager.GpuToCpuAddress(address)) {
-                rasterizer->FlushRegion(*device, size, VideoCommon::CacheType::All);
-            }
-            u32 nonzero{}, samples{}, distinct{};
-            u32 last{};
-            for (u64 offset = 0; offset < size; offset += 4096 + 4) {
-                const u32 word = memory_manager.Read<u32>(address + offset);
-                ++samples;
-                nonzero += word != 0;
-                distinct += word != last;
-                last = word;
-            }
-            LOG_INFO(HW_GPU, "Upscale fallback target {:#x}: {}/{} non-zero, {} changes", address, nonzero,
-                     samples, distinct);
-            (void)fake;
-        }
     }
     auto source = surface(*input);
     // EDEN_NX2_UPSCALE_SOURCE=<gpu address>: blit from another same-sized image (debug aid).
@@ -1093,7 +1073,7 @@ bool KeplerCompute::UpscaleInsteadOfNativeProgram() {
     // Debug: trace the draws that follow one upscale (EDEN_NX2_RT_TRACE_AFTER_UPSCALE).
     static const u32 trace_at = [] {
         const char* value = std::getenv("EDEN_NX2_TRACE_AFTER_UPSCALE");
-        return value ? static_cast<u32>(std::strtoul(value, nullptr, 10)) : 30U;
+        return value ? static_cast<u32>(std::strtoul(value, nullptr, 10)) : ~0U;
     }();
     if (static u32 count{}; ++count == trace_at) g_nx2_trace_draws_after_upscale = 40;
     static u32 logged{};
