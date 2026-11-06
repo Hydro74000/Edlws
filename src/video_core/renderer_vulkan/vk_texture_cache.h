@@ -290,7 +290,7 @@ public:
     u64 transcode_time_step{};
     std::chrono::steady_clock::time_point calm_since{};
     std::chrono::steady_clock::time_point raised_at{};
-    std::chrono::seconds calm_time{30};
+    std::chrono::seconds calm_time{120};
     bool adapts_texture_limit{};
     /// Decode images the GPU is done with, for the next texture of the same shape.
     std::vector<PendingTranscode> free_transcodes;

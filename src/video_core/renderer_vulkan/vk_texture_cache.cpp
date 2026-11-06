@@ -2659,7 +2659,7 @@ void TextureCacheRuntime::NoteTranscodeTime(u64 microseconds) {
     static constexpr u64 LowPercent = 10;
     static constexpr u32 FirstLimit = 2048;
     static constexpr u32 LowestLimit = 512;
-    static constexpr auto FirstCalmTime = seconds{30};
+    static constexpr auto FirstCalmTime = seconds{120};
     static constexpr auto LongestCalmTime = seconds{480};
     constexpr u64 StepMs = 250;
     const u64 window_us = StepMs * 1000 * transcode_time.size();
@@ -2678,7 +2678,8 @@ void TextureCacheRuntime::NoteTranscodeTime(u64 microseconds) {
         calm_since = now;
     }
     u32 limit = astc_texture_limit;
-    // Calm between two bursts says little: a rise the next burst undoes waits twice as long.
+    // Calm between two bursts says little: 30 s of it gave a Vega its full size back mid-race, and
+    // a rise the next burst undoes waits twice as long.
     if (now - raised_at >= calm_time * 2) {
         calm_time = FirstCalmTime;
     }
