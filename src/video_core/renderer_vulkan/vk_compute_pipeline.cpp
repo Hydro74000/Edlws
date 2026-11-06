@@ -303,7 +303,7 @@ bool ComputePipeline::Configure(Tegra::Engines::KeplerCompute& kepler_compute,
     PushImageDescriptors(texture_cache, guest_descriptor_queue, info, rescaling, samplers_it,
                          views_it);
 
-    if (!is_built.load(std::memory_order::relaxed)) {
+    if (!is_built.load(std::memory_order::acquire)) {
         // Wait for the pipeline to be built
         scheduler.Record([this, where = std::source_location::current()](vk::CommandBuffer) {
             const VideoCommon::LongWait long_wait{
