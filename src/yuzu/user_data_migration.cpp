@@ -99,13 +99,12 @@ void UserDataMigrator::ShowMigrationPrompt(QMainWindow* main_window) {
     migration_prompt.setText(prompt_text);
     migration_prompt.addButton(QObject::tr("No"), true);
 
-    migration_prompt.exec();
-
-    QAbstractButton* button = migration_prompt.clickedButton();
-
-    if (button->text() == QObject::tr("No")) {
+    // Only the emulators' buttons accept. No, Escape and the window's close button all reject.
+    if (migration_prompt.exec() != QDialog::Accepted) {
         return ShowMigrationCancelledMessage(main_window);
     }
+
+    QAbstractButton* button = migration_prompt.clickedButton();
 
     MigrationWorker::MigrationStrategy strategy =
         static_cast<MigrationWorker::MigrationStrategy>(group->checkedId());
