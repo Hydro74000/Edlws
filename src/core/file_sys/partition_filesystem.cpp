@@ -47,12 +47,15 @@ PartitionFilesystem::PartitionFilesystem(VirtualFile file) {
     std::size_t metadata_size =
         sizeof(Header) + (pfs_header.num_entries * entry_size) + pfs_header.strtab_size;
 
-    // Actually read in now...
-    std::vector<u8> file_data = file->ReadBytes(metadata_size);
-    const std::size_t total_size = file_data.size();
-    file_data.push_back(0);
+    // ReadBytes allocates what it is asked for before reading.
+    if (metadata_size > file->GetSize()) {
+        status = Loader::ResultStatus::ErrorIncorrectPFSFileSize;
+        return;
+    }
 
-    if (total_size != metadata_size) {
+    // Actually read in now...
+    const std::vector<u8> file_data = file->ReadBytes(metadata_size);
+    if (file_data.size() != metadata_size) {
         status = Loader::ResultStatus::ErrorIncorrectPFSFileSize;
         return;
     }
@@ -60,12 +63,18 @@ PartitionFilesystem::PartitionFilesystem(VirtualFile file) {
     std::size_t entries_offset = sizeof(Header);
     std::size_t strtab_offset = entries_offset + (pfs_header.num_entries * entry_size);
     content_offset = strtab_offset + pfs_header.strtab_size;
-    for (u16 i = 0; i < pfs_header.num_entries; i++) {
+    const auto strtab_end = file_data.begin() + content_offset;
+    for (u32 i = 0; i < pfs_header.num_entries; i++) {
         FSEntry entry;
 
         memcpy(&entry, &file_data[entries_offset + (i * entry_size)], sizeof(FSEntry));
-        std::string name(
-            reinterpret_cast<const char*>(&file_data[strtab_offset + entry.strtab_offset]));
+        if (entry.strtab_offset > pfs_header.strtab_size) {
+            status = Loader::ResultStatus::ErrorBadPFSHeader;
+            return;
+        }
+        // The last name may end with the table instead of a terminator.
+        const auto name_begin = file_data.begin() + strtab_offset + entry.strtab_offset;
+        std::string name(name_begin, std::find(name_begin, strtab_end, u8{0}));
 
         offsets.insert_or_assign(name, content_offset + entry.offset);
         sizes.insert_or_assign(name, entry.size);
