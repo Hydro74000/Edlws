@@ -70,6 +70,11 @@ public:
 
     void TickFrame();
 
+    /// The longest side a new Switch 2 ASTC texture keeps on the host, 0 for no limit.
+    u32 AstcTextureLimit() const noexcept {
+        return astc_texture_limit;
+    }
+
     void FlushDeferredClear();
 
     u64 GetDeviceLocalMemory() const;
@@ -272,6 +277,7 @@ public:
     void ReleaseFinishedTranscodes();
     /// Decode images the GPU is done with, for the next texture of the same shape.
     std::vector<PendingTranscode> free_transcodes;
+    u32 astc_texture_limit{};
 
     std::optional<BlockLinearUnswizzle3DPass> bl3d_unswizzle_pass;
     const Settings::ResolutionScalingInfo& resolution;

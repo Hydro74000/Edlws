@@ -354,10 +354,32 @@ constexpr std::array<VkFormat, 2> OpaqueAstcViewFormats{VK_FORMAT_BC1_RGBA_UNORM
 // over 1 GiB as RGBA8 (title 1's 8192x8192x68 ASTC 8x8 virtual textures are 24 GB each) keeps only
 // its mip levels from `level_offset` on, so host mip 0 is guest mip `level_offset`. Normalized
 // coordinates and derivative LOD still address it correctly; explicit LODs sample one level lower.
-[[nodiscard]] ImageInfo TrimmedHostInfo(const Device& device, const ImageInfo& info, u32& level_offset) {
+// `max_size`, when not 0, is the longest side a Switch 2 ASTC texture decoded on the GPU keeps: a
+// larger one is held from a later mip level on. The game's own mips are used, nothing is resampled.
+[[nodiscard]] ImageInfo TrimmedHostInfo(const Device& device, const ImageInfo& info, u32& level_offset,
+                                        u32 max_size) {
     level_offset = 0;
-    if (!WillUseAcceleratedAstcDecode(device, info) || info.type != ImageType::e2D) {
+    const bool decoded = WillUseAcceleratedAstcDecode(device, info);
+    if (info.type != ImageType::e2D || !(decoded || WillUseGpuBcnTranscode(device, info))) {
         return info;
+    }
+    const u32 levels = static_cast<u32>(info.resources.levels);
+    const auto host_info = [&] {
+        ImageInfo host = info;
+        host.size.width = (std::max)(info.size.width >> level_offset, 1U);
+        host.size.height = (std::max)(info.size.height >> level_offset, 1U);
+        host.resources.levels -= static_cast<s32>(level_offset);
+        return host;
+    };
+    if (max_size != 0 && info.native_tiling) {
+        while (level_offset + 1 < levels &&
+               (std::max)(info.size.width >> level_offset, info.size.height >> level_offset) >
+                   max_size) {
+            ++level_offset;
+        }
+    }
+    if (!decoded) {
+        return level_offset != 0 ? host_info() : info;
     }
     const auto decoded_bytes = [&](u32 skip) {
         u64 bytes = 0;
@@ -367,18 +389,14 @@ constexpr std::array<VkFormat, 2> OpaqueAstcViewFormats{VK_FORMAT_BC1_RGBA_UNORM
         }
         return bytes * info.resources.layers;
     };
-    if (decoded_bytes(0) <= (u64{1} << 30)) {
-        return info;
+    if (decoded_bytes(level_offset) <= (u64{1} << 30)) {
+        return level_offset != 0 ? host_info() : info;
     }
     const u64 limit = TrimmedAstcArrayLimit(device);
-    while (level_offset + 1 < static_cast<u32>(info.resources.levels) &&
-           decoded_bytes(level_offset) > limit) {
+    while (level_offset + 1 < levels && decoded_bytes(level_offset) > limit) {
         ++level_offset;
     }
-    ImageInfo host = info;
-    host.size.width = (std::max)(info.size.width >> level_offset, 1U);
-    host.size.height = (std::max)(info.size.height >> level_offset, 1U);
-    host.resources.levels -= static_cast<s32>(level_offset);
+    const ImageInfo host = host_info();
     LOG_WARNING(Render_Vulkan, "{}x{}x{} ASTC image would be {} MiB decoded; keeping mip levels {}+ ({}x{})",
                 info.size.width, info.size.height, info.resources.layers, decoded_bytes(0) >> 20,
                 level_offset, host.size.width, host.size.height);
@@ -1214,6 +1232,9 @@ TextureCacheRuntime::TextureCacheRuntime(const Device& device_, Scheduler& sched
       render_pass_cache{render_pass_cache_}, descriptor_pool{descriptor_pool_},
       compute_pass_descriptor_queue{compute_pass_descriptor_queue_},
       resolution{Settings::values.resolution_info} {
+    if (const char* value = std::getenv("EDEN_NX2_TEXTURE_LIMIT")) {
+        astc_texture_limit = static_cast<u32>(std::strtoul(value, nullptr, 10));
+    }
     // Before anything below reads astc_recompression (passes, view formats).
     UseBc3ForSwitch2OnSmallCards(device);
     // Huge ASTC arrays always decode on the GPU (IsHugeAstcArray), whatever the decode setting.
@@ -2651,7 +2672,8 @@ Image::Image(TextureCacheRuntime& runtime_, const ImageInfo& info_, GPUVAddr gpu
     : VideoCommon::ImageBase(info_, gpu_addr_, cpu_addr_), scheduler{&runtime_.scheduler},
       runtime{&runtime_},
       original_image(MakeImage(runtime_.device, runtime_.memory_allocator,
-                               TrimmedHostInfo(runtime_.device, info, host_level_offset),
+                               TrimmedHostInfo(runtime_.device, info, host_level_offset,
+                                               runtime_.AstcTextureLimit()),
                                IsHugeAstcArray(runtime_.device, info)
                                    ? std::span<const VkFormat>{HugeAstcViewFormats}
                                : IsOpaqueBc1Astc(runtime_.device, info)
@@ -2666,7 +2688,8 @@ Image::Image(TextureCacheRuntime& runtime_, const ImageInfo& info_, GPUVAddr gpu
       aspect_mask(ImageAspectMask(info.format)) {
     if (original_image.IsUnbacked()) {
         flags |= VideoCommon::ImageFlagBits::Unbacked;
-        const ImageInfo host_info = TrimmedHostInfo(runtime_.device, info, host_level_offset);
+        const ImageInfo host_info = TrimmedHostInfo(runtime_.device, info, host_level_offset,
+                                                    runtime_.AstcTextureLimit());
         const u64 texels = u64{host_info.size.width} * host_info.size.height *
                            host_info.size.depth * static_cast<u64>(host_info.resources.layers);
         if (UsesSparseLayers(runtime_.device, info, gpu_addr_) && InitSparseLayers()) {
@@ -3164,7 +3187,7 @@ bool Image::InitSparseLayers() {
     s.requirements = device.GetLogical().GetImageMemoryRequirements(handle);
     s.sparse = *it;
     u32 offset = host_level_offset;
-    const ImageInfo host = TrimmedHostInfo(device, info, offset);
+    const ImageInfo host = TrimmedHostInfo(device, info, offset, runtime->AstcTextureLimit());
     s.width = host.size.width;
     s.height = host.size.height;
     s.levels = static_cast<u32>(host.resources.levels);
@@ -4630,9 +4653,12 @@ void TextureCacheRuntime::TranscodeAstcToBcn(
     // the images the GPU is done with held 2 to 3 GB of them.
     ReleaseFinishedTranscodes();
     const ImageInfo& info = image.info;
-    const u32 width = info.size.width;
-    const u32 height = info.size.height;
-    const u32 levels = static_cast<u32>(info.resources.levels);
+    // The host image may hold only the guest levels from host_level_offset on (TrimmedHostInfo):
+    // the staging data and swizzles then start at that level, and host level 0 is that level.
+    const u32 skip = image.host_level_offset;
+    const u32 width = (std::max)(info.size.width >> skip, 1U);
+    const u32 height = (std::max)(info.size.height >> skip, 1U);
+    const u32 levels = static_cast<u32>(info.resources.levels) - skip;
     const u32 layers = static_cast<u32>(info.resources.layers);
     constexpr VkFormat DecodeFormat = VK_FORMAT_A8B8G8R8_UNORM_PACK32;
     // A decode image of the same shape the GPU is done with: title 1's title screen decodes
@@ -4678,7 +4704,7 @@ void TextureCacheRuntime::TranscodeAstcToBcn(
         }
     }
     astc_decoder_pass->AssembleInto(
-        info, 0, image.guest_size_bytes,
+        info, skip, image.guest_size_bytes,
         ASTCDecoderPass::Target{
             .image = *pending.image,
             .aspect_mask = VK_IMAGE_ASPECT_COLOR_BIT,
