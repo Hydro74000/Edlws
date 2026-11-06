@@ -54,9 +54,10 @@ Loose RomFS directory lookup accepts mixed-case names on case-sensitive hosts;
 NUP tests check that the base version metadata and archive checksum agree across
 Windows and Linux.
 
-The Windows test package uses Clang 23.1.4, the checksum-pinned Eden v020525 PGO
-profile, and ThinLTO with backend optimization disabled (`--lto-O0`), matching the
-working startup test. Selevet's MSVC-ABI profile is not substituted for the MinGW
+The Windows test package of that integration used Clang 23.1.4, the checksum-pinned
+Eden v020525 PGO profile, and ThinLTO with backend optimization disabled (`--lto-O0`),
+matching the working startup test. Current packages use `edelweiss.profdata` instead,
+see `.github/workflows/release-binaries.yml`. Selevet's MSVC-ABI profile is not substituted for the MinGW
 build's profile. Link-time optimization is a build option; other platforms can
 continue using their usual build configuration.
 
