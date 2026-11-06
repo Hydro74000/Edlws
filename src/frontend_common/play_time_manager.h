@@ -6,7 +6,9 @@
 
 #pragma once
 
+#include <atomic>
 #include <map>
+#include <mutex>
 
 #include "common/common_funcs.h"
 #include "common/common_types.h"
@@ -47,8 +49,10 @@ private:
     void AutoTimestamp(std::stop_token stop_token);
     void Save();
 
+    /// Holds for both, and for writing the file: the game list reads this from its own thread.
+    mutable std::mutex database_mutex;
     PlayTimeDatabase database;
-    u64 running_program_id{};
+    std::atomic<u64> running_program_id{};
     std::jthread play_time_thread;
 };
 

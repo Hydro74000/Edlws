@@ -74,24 +74,36 @@ std::optional<std::filesystem::path> GetCurrentUserPlayTimePath() {
         return false;
     }
 
-    Common::FS::IOFile file{filename.value(), Common::FS::FileAccessMode::Write,
-                            Common::FS::FileType::BinaryFile};
-    if (!file.IsOpen()) {
-        LOG_ERROR(Frontend, "Failed to open play time file: {}",
-                  Common::FS::PathToUTF8String(filename.value()));
-        return false;
-    }
+    // Written beside the file and moved over it: stopping halfway can't lose what was there.
+    auto temporary = filename.value();
+    temporary += ".tmp";
+    {
+        Common::FS::IOFile file{temporary, Common::FS::FileAccessMode::Write,
+                                Common::FS::FileType::BinaryFile};
+        if (!file.IsOpen()) {
+            LOG_ERROR(Frontend, "Failed to open play time file: {}",
+                      Common::FS::PathToUTF8String(temporary));
+            return false;
+        }
 
-    std::vector<PlayTimeElement> elements;
-    elements.reserve(play_time_db.size());
+        std::vector<PlayTimeElement> elements;
+        elements.reserve(play_time_db.size());
 
-    for (auto& [program_id, play_time] : play_time_db) {
-        if (program_id != 0) {
-            elements.push_back(PlayTimeElement{program_id, play_time});
+        for (auto& [program_id, play_time] : play_time_db) {
+            if (program_id != 0) {
+                elements.push_back(PlayTimeElement{program_id, play_time});
+            }
+        }
+
+        // Closing doesn't report a flush that failed, and the move must not follow one.
+        if (file.WriteSpan<PlayTimeElement>(elements) != elements.size() || !file.Commit()) {
+            return false;
         }
     }
 
-    return file.WriteSpan<PlayTimeElement>(elements) == elements.size();
+    std::error_code ec;
+    std::filesystem::rename(temporary, filename.value(), ec);
+    return !ec;
 }
 
 } // namespace
@@ -103,6 +115,8 @@ PlayTimeManager::PlayTimeManager() : running_program_id() {
 }
 
 PlayTimeManager::~PlayTimeManager() {
+    Stop();
+    std::scoped_lock lock{database_mutex};
     Save();
 }
 
@@ -136,6 +150,7 @@ void PlayTimeManager::AutoTimestamp(std::stop_token stop_token) {
     while (!stop_token.stop_requested()) {
         Common::StoppableTimedWait(stop_token, 30s);
 
+        std::scoped_lock lock{database_mutex};
         database[running_program_id] += GetDuration();
         Save();
     }
@@ -148,6 +163,7 @@ void PlayTimeManager::Save() {
 }
 
 u64 PlayTimeManager::GetPlayTime(u64 program_id) const {
+    std::scoped_lock lock{database_mutex};
     auto it = database.find(program_id);
     if (it != database.end()) {
         return it->second;
@@ -157,11 +173,13 @@ u64 PlayTimeManager::GetPlayTime(u64 program_id) const {
 }
 
 void PlayTimeManager::SetPlayTime(u64 program_id, u64 play_time) {
+    std::scoped_lock lock{database_mutex};
     database[program_id] = play_time;
     Save();
 }
 
 void PlayTimeManager::ResetProgramPlayTime(u64 program_id) {
+    std::scoped_lock lock{database_mutex};
     database.erase(program_id);
     Save();
 }
