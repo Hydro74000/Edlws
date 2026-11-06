@@ -16,12 +16,17 @@ namespace QtCommon::FS {
 void LinkRyujinx(std::filesystem::path& from, std::filesystem::path& to) {
     std::error_code ec;
 
-    // "ignore" errors--if the dir fails to be deleted, error handling later will handle it
-    fs::remove_all(to, ec);
+    // Kept until the link exists: when linking fails this may be the only copy.
+    fs::path old = to;
+    old += ".unlinked";
+    fs::remove_all(old, ec);
+    fs::rename(to, old, ec);
 
     if (Common::FS::CreateSymlink(from, to)) {
+        fs::remove_all(old, ec);
         QtCommon::Frontend::Information(tr("Linked Save Data"), tr("Save data has been linked."));
     } else {
+        fs::rename(old, to, ec);
         QtCommon::Frontend::Critical(
             tr("Failed to link save data"),
             tr("Could not link directory:\n\t%1\nTo:\n\t%2")
@@ -74,9 +79,14 @@ bool CheckUnlink(const fs::path& eden_dir, const fs::path& ryu_dir) {
     try {
         fs::copy(orig, linked, fs::copy_options::recursive);
     } catch (std::exception& e) {
+        // Linked again, rather than leaving the game a partial copy.
+        std::error_code ec;
+        fs::remove_all(linked, ec);
+        Common::FS::CreateSymlink(orig, linked);
         QtCommon::Frontend::Critical(
             tr("Failed to copy save data"),
             tr("OS returned error: %1").arg(QString::fromStdString(e.what())));
+        return true;
     }
 
     QtCommon::Frontend::Information(
