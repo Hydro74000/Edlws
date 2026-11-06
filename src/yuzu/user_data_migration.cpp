@@ -149,7 +149,16 @@ void UserDataMigrator::MigrateUserData(QMainWindow* main_window, const bool clea
                         thread->quit();
                     });
 
+    thread->connect(worker, &MigrationWorker::error, progress,
+                    [=](const QString& error_text) {
+                        progress->close();
+                        QMessageBox::critical(main_window, QObject::tr("Migration"), error_text,
+                                              QMessageBox::Ok);
+                        thread->quit();
+                    });
+
     thread->connect(worker, &MigrationWorker::finished, worker, &QObject::deleteLater);
+    thread->connect(worker, &MigrationWorker::error, worker, &QObject::deleteLater);
     thread->connect(thread, &QThread::finished, thread, &QObject::deleteLater);
 
     thread->start();
