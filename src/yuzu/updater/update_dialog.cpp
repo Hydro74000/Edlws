@@ -118,7 +118,7 @@ void UpdateDialog::Download() {
     // Progress dialog.
     auto progress_callback = [&](size_t processed_size, size_t total_size) {
         QGuiApplication::processEvents();
-        progress->setValue(static_cast<int>((processed_size * 100) / total_size));
+        progress->setValue(total_size != 0 ? static_cast<int>((processed_size * 100) / total_size) : 0);
         return !progress->wasCanceled();
     };
 

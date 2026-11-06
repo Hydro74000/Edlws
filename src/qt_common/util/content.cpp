@@ -23,6 +23,13 @@
 
 namespace QtCommon::Content {
 
+namespace {
+// Empty directories and archives report a total of 0.
+int Percent(size_t processed_size, size_t total_size) {
+    return total_size != 0 ? static_cast<int>((processed_size * 100) / total_size) : 100;
+}
+} // namespace
+
 bool CheckGameFirmware(u64 program_id) {
     if (FirmwareManager::GameRequiresFirmware(program_id) &&
         !FirmwareManager::CheckFirmwarePresence(*system)) {
@@ -49,7 +56,7 @@ void InstallFirmware(const QString& location, bool recursive) {
     // Declare progress callback.
     auto callback = [&](size_t total_size, size_t processed_size) {
         QGuiApplication::processEvents();
-        progress->setValue(static_cast<int>((processed_size * 100) / total_size));
+        progress->setValue(Percent(processed_size, total_size));
         return progress->wasCanceled();
     };
 
@@ -150,7 +157,7 @@ void InstallFirmware(const QString& location, bool recursive) {
 
     auto VerifyFirmwareCallback = [&](size_t total_size, size_t processed_size) {
         QGuiApplication::processEvents();
-        progress->setValue(90 + static_cast<int>((processed_size * 10) / total_size));
+        progress->setValue(90 + Percent(processed_size, total_size) / 10);
         return progress->wasCanceled();
     };
 
@@ -211,7 +218,7 @@ void VerifyGameContents(const std::string& game_path) {
 
     const auto callback = [&](size_t total_size, size_t processed_size) {
         QGuiApplication::processEvents();
-        progress->setValue(static_cast<int>((processed_size * 100) / total_size));
+        progress->setValue(Percent(processed_size, total_size));
         return progress->wasCanceled();
     };
 
@@ -268,7 +275,7 @@ void VerifyInstalledContents() {
     // Declare progress callback.
     auto QtProgressCallback = [&](size_t total_size, size_t processed_size) {
         QGuiApplication::processEvents();
-        progress->setValue(static_cast<int>((processed_size * 100) / total_size));
+        progress->setValue(Percent(processed_size, total_size));
         return progress->wasCanceled();
     };
 
@@ -385,7 +392,7 @@ void ExportDataDir(FrontendCommon::DataManager::DataDir data_dir, const std::str
     auto progress_callback = [=](size_t total_size, size_t processed_size) {
         QMetaObject::invokeMethod(
             progress, "setValue", Qt::DirectConnection,
-            Q_ARG(int, static_cast<int>((processed_size * 100) / total_size)));
+            Q_ARG(int, Percent(processed_size, total_size)));
         return !progress->wasCanceled();
     };
 
@@ -458,7 +465,7 @@ void ImportDataDir(FrontendCommon::DataManager::DataDir data_dir, const std::str
         auto progress_callback = [=](size_t total_size, size_t processed_size) {
             QMetaObject::invokeMethod(
                 progress, "setValue", Qt::DirectConnection,
-                Q_ARG(int, static_cast<int>((processed_size * 100) / total_size)));
+                Q_ARG(int, Percent(processed_size, total_size)));
             return !progress->wasCanceled();
         };
 
