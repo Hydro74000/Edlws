@@ -550,6 +550,7 @@ bool NupContainer::ValidateDirTree() const {
     };
     std::vector<u8> state(dirs.size(), Unvisited);
     std::vector<u32> height(dirs.size(), 0);
+    std::vector<bool> referenced(dirs.size(), false);
     std::vector<Frame> stack;
     for (u32 start = 0; start < dirs.size(); ++start) {
         if (state[start] != Unvisited) {
@@ -578,6 +579,13 @@ bool NupContainer::ValidateDirTree() const {
                 LOG_ERROR(Loader, "NUP directory tree contains a cycle");
                 return false;
             }
+            // BuildDirTree expands each reference, so a kilobyte of nested shared directories
+            // would become millions of objects. Packers write a real tree.
+            if (referenced[child]) {
+                LOG_ERROR(Loader, "NUP directory has more than one parent");
+                return false;
+            }
+            referenced[child] = true;
             if (state[child] == Done) {
                 height[frame.dir] = std::max(height[frame.dir], height[child] + 1);
             } else {

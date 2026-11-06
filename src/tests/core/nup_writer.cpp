@@ -371,6 +371,25 @@ TEST_CASE("NUP rejects a directory that contains its own ancestor", "[nup]") {
             }) == Loader::ResultStatus::ErrorNUPBadFormat);
 }
 
+TEST_CASE("NUP rejects a directory with two parents", "[nup]") {
+    TempDir t;
+    const auto root = t.path / "Game";
+    MakeDump(root);
+    const auto archive = t.path / "Game.nup";
+    REQUIRE(FileSys::Nup::PackDump(root, archive) == FileSys::Nup::PackResult::Success);
+
+    // Point both folders of the package root, exefs and romfs, at the same directory.
+    REQUIRE(StatusAfterPatch(ReadAll(archive), [](std::string& buf, u64 toc) {
+                const u64 dirs = toc + 0x30 + Le(buf, toc + 0x04, 4) * 0x40;
+                const u64 children =
+                    dirs + Le(buf, toc + 0x08, 8) * 0x18 + Le(buf, toc + 0x10, 8) * 0x50;
+                const u64 root_record = dirs + Le(buf, toc + 0x30 + 0x08, 4) * 0x18;
+                const u64 first_child = Le(buf, root_record + 0x08, 4);
+                SetLe(buf, children + (first_child + 1) * 4,
+                      Le(buf, children + first_child * 4, 4), 4);
+            }) == Loader::ResultStatus::ErrorNUPBadFormat);
+}
+
 TEST_CASE("NUP marks updates standalone when the dump has no base", "[nup]") {
     TempDir t;
     const auto root = t.path / "Game";
