@@ -204,6 +204,15 @@ AppLoader::LoadResult AppLoader_NUP::Load(Kernel::KProcess& process, Core::Syste
         return result;
     }
 
+    // The RomFS factory hands out a RomFS that isn't updatable as is, and this one already has its
+    // update merged: apply LayeredFS mods (user/load/<title id>/) here, once, as loose-ExeFS
+    // loads do.
+    if (FileSys::VirtualFile romfs; ReadRomFS(romfs) == ResultStatus::Success) {
+        const FileSys::PatchManager patch_manager{base_title_id, system.GetFileSystemController(),
+                                                  system.GetContentProvider()};
+        patched_romfs = patch_manager.PatchRomFS(nullptr, std::move(romfs));
+    }
+
     system.GetFileSystemController().RegisterProcess(
         process.GetProcessId(), base_title_id,
         std::make_shared<FileSys::RomFSFactory>(*this, system.GetContentProvider(),
@@ -222,6 +231,10 @@ ResultStatus AppLoader_NUP::VerifyIntegrity(
 }
 
 ResultStatus AppLoader_NUP::ReadRomFS(FileSys::VirtualFile& out_file) {
+    if (patched_romfs != nullptr) {
+        out_file = patched_romfs;
+        return ResultStatus::Success;
+    }
     const auto base_index = nup->FindBasePackage();
     const auto base_romfs = base_index ? nup->GetRomFSDir(*base_index) : FileSys::VirtualDir{};
     const auto update_index = nup->FindBestUpdatePackage();
