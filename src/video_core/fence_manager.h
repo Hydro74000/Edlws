@@ -120,6 +120,10 @@ public:
             guard.unlock();
             cv.notify_all();
         }
+        if (delay_fence) {
+            // The fencing thread waits for this fence's submission before running its callback.
+            SubmitDeferredWork();
+        }
         rasterizer.InvalidateGPUCache();
     }
 
@@ -152,6 +156,9 @@ public:
                 wait_cv.notify_all();
             });
             SignalFence(std::move(func));
+            // A deferred flush can hold the fence back, and only this thread submits it: the
+            // fencing thread waits for that submission, so waiting here first deadlocks.
+            SubmitDeferredWork();
             std::unique_lock lk(wait_mutex);
             wait_cv.wait(
                 lk, [&wait_finished] { return wait_finished.load(std::memory_order_relaxed); });
@@ -187,6 +194,8 @@ protected:
     virtual bool IsFenceSignaled(TFence& fence) const = 0;
     /// Waits until a fence has been signalled by the host GPU.
     virtual void WaitFence(TFence& fence) = 0;
+    /// Submits work the backend deferred (before blocking on a fence).
+    virtual void SubmitDeferredWork() {}
 
     VideoCore::RasterizerInterface& rasterizer;
     Tegra::GPU& gpu;

@@ -74,4 +74,11 @@ void FenceManager::WaitFence(Fence& fence) {
     fence->Wait();
 }
 
+void FenceManager::SubmitDeferredWork() {
+    // Only the split's back submits: elsewhere nothing was deferred (Scheduler::DeferFlush).
+    if (VideoCommon::GpuSplit::OnBackThread()) {
+        scheduler.FlushDeferred();
+    }
+}
+
 } // namespace Vulkan
