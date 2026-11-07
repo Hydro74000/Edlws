@@ -89,6 +89,34 @@ TEST_CASE("RomFS reads a well formed table", "[file_sys]") {
     REQUIRE(root->GetFiles().size() == 1);
 }
 
+TEST_CASE("RomFS reads back what the builder writes", "[file_sys]") {
+    const auto file = [](std::string name, std::vector<u8> bytes) {
+        return std::make_shared<FileSys::VectorVfsFile>(std::move(bytes), std::move(name));
+    };
+    const auto dir = [](std::vector<FileSys::VirtualFile> files,
+                        std::vector<FileSys::VirtualDir> dirs, std::string name) {
+        return std::make_shared<FileSys::VectorVfsDirectory>(std::move(files), std::move(dirs),
+                                                             std::move(name));
+    };
+    const auto deep = dir({file("deep.bin", {1, 2, 3})}, {}, "deep");
+    const auto data = dir({file("a.bin", std::vector<u8>(5000, 7)), file("b.bin", {9})},
+                          {deep, dir({}, {}, "empty")}, "data");
+    const auto root = dir({file("top.bin", {4, 5})}, {data}, "");
+
+    const auto extracted = FileSys::ExtractRomFS(FileSys::CreateRomFS(root));
+    REQUIRE(extracted != nullptr);
+    REQUIRE(extracted->GetFile("top.bin") != nullptr);
+    const auto read_data = extracted->GetSubdirectory("data");
+    REQUIRE(read_data != nullptr);
+    REQUIRE(read_data->GetFiles().size() == 2);
+    REQUIRE(read_data->GetFile("a.bin")->GetSize() == 5000);
+    REQUIRE(read_data->GetSubdirectories().size() == 2);
+    REQUIRE(read_data->GetSubdirectory("empty") != nullptr);
+    const auto read_deep = read_data->GetSubdirectory("deep");
+    REQUIRE(read_deep != nullptr);
+    REQUIRE(read_deep->GetFile("deep.bin")->ReadAllBytes() == std::vector<u8>{1, 2, 3});
+}
+
 TEST_CASE("RomFS rejects cycles", "[file_sys]") {
     REQUIRE(FileSys::ExtractRomFS(File(RomFs(NoEntry, 0, NoEntry, NoEntry))) == nullptr);
     REQUIRE(FileSys::ExtractRomFS(File(RomFs(0, NoEntry, NoEntry, NoEntry))) == nullptr);
