@@ -81,7 +81,11 @@ public:
                     ++work_done;
                 }
             }
-            ++workers_stopped;
+            {
+                // Under the lock, or a waiter that has just checked its predicate misses it.
+                std::scoped_lock lock{queue_mutex};
+                ++workers_stopped;
+            }
             wait_condition.notify_all();
         };
         threads.reserve(num_workers);
