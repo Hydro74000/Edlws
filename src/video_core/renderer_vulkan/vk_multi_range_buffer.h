@@ -59,6 +59,9 @@ public:
 
     void DropOwner(Scheduler& scheduler, VkBuffer owner);
 
+    /// Frees retired buffers the GPU is done with, even when no lookup comes.
+    void TickFrame(Scheduler& scheduler);
+
     VkDeviceSize block_size{DEFAULT_BLOCK_SIZE};
     bool use_sparse{};
 
