@@ -78,21 +78,26 @@ public:
     }
 
 private:
-    void TrackPage(u64 page, u64 offset, u64 size) noexcept {
+    /// Mask of the 64-byte blocks of a page that a range touches, clamped to the page end. Counting
+    /// whole blocks from the first one lost the last block of a range ending inside it (a 16-byte
+    /// write tracked nothing), and an empty range shifted by 64.
+    static u64 PageMask(u64 offset, u64 size) noexcept {
         const size_t offset_in_page = offset % BUFFER_PAGE_BYTES;
         const size_t first_bit = offset_in_page >> BUFFER_BYTES_PER_BITSHIFT;
-        const size_t num_bits = std::min<size_t>(size, BUFFER_PAGE_BYTES) >> BUFFER_BYTES_PER_BITSHIFT;
-        const size_t mask = ~u64{0} >> (64 - num_bits);
-        pages[page] |= (~u64{0} & mask) << first_bit;
+        const size_t bytes = std::min<size_t>(size, BUFFER_PAGE_BYTES - offset_in_page);
+        const size_t last_bit = (offset_in_page + bytes - 1) >> BUFFER_BYTES_PER_BITSHIFT;
+        const size_t num_bits = last_bit - first_bit + 1;
+        return (~u64{0} >> (64 - num_bits)) << first_bit;
+    }
+
+    void TrackPage(u64 page, u64 offset, u64 size) noexcept {
+        if (size != 0) {
+            pages[page] |= PageMask(offset, size);
+        }
     }
 
     bool IsPageUsed(u64 page, u64 offset, u64 size) const noexcept {
-        const size_t offset_in_page = offset % BUFFER_PAGE_BYTES;
-        const size_t first_bit = offset_in_page >> BUFFER_BYTES_PER_BITSHIFT;
-        const size_t num_bits = std::min<size_t>(size, BUFFER_PAGE_BYTES) >> BUFFER_BYTES_PER_BITSHIFT;
-        const size_t mask = ~u64{0} >> (64 - num_bits);
-        const size_t mask2 = (~u64{0} & mask) << first_bit;
-        return (pages[page] & mask2) != 0;
+        return size != 0 && (pages[page] & PageMask(offset, size)) != 0;
     }
 
 private:
