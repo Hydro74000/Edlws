@@ -59,6 +59,15 @@ public:
 
     void StartLoop();
 
+    /// Whether the peer joined the room.
+    bool IsMember(const ENetPeer* peer) const;
+
+    /**
+     * Connecting isn't joining: a peer that hasn't given the password or passed the bans may only
+     * ask to join, whatever else it sends would otherwise be relayed to the members.
+     */
+    bool IsAccepted(const ENetEvent& event) const;
+
     /**
      * Parses and answers a room join request from a client.
      * Validates the uniqueness of the username and assigns the MAC address
@@ -243,6 +252,10 @@ void Room::RoomImpl::StartLoop() {
             if (enet_host_service(server, &event, 5) > 0) {
                 switch (event.type) {
                 case ENET_EVENT_TYPE_RECEIVE:
+                    if (!IsAccepted(event)) {
+                        enet_packet_destroy(event.packet);
+                        break;
+                    }
                     switch (event.packet->data[0]) {
                     case IdJoinRequest:
                         HandleJoinRequest(&event);
@@ -289,7 +302,22 @@ void Room::RoomImpl::StartLoop() {
     });
 }
 
+bool Room::RoomImpl::IsMember(const ENetPeer* peer) const {
+    std::lock_guard lock(member_mutex);
+    return std::any_of(members.begin(), members.end(),
+                       [peer](const auto& member) { return member.peer == peer; });
+}
+
+bool Room::RoomImpl::IsAccepted(const ENetEvent& event) const {
+    return event.packet->dataLength != 0 &&
+           (event.packet->data[0] == IdJoinRequest || IsMember(event.peer));
+}
+
 void Room::RoomImpl::HandleJoinRequest(const ENetEvent* event) {
+    // A disconnect removes one member per peer, and a second one would stay forever.
+    if (IsMember(event->peer)) {
+        return;
+    }
     {
         std::lock_guard lock(member_mutex);
         if (members.size() >= room_information.member_slots) {
