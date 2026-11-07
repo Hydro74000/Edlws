@@ -129,6 +129,13 @@ struct ImageBase {
     u64 modification_tick = 0;
     size_t lru_index = SIZE_MAX;
 
+    // See TextureCache::ContentUnchanged.
+    u64 content_hash = 0;
+    u64 content_tick = 0;
+    u32 content_refreshes = 0;
+    u32 content_changes = 0;
+    bool content_hashed = false;
+
     std::array<u32, MAX_MIP_LEVELS> mip_level_offsets{};
 
     std::vector<ImageViewInfo> image_view_infos;

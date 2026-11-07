@@ -170,6 +170,9 @@ class TextureCache : public VideoCommon::ChannelSetupCaches<TextureCacheChannelI
     /// Splits large 2D image uploads into smaller chunks, avoiding multi-hundred MiB staging buffers.
     bool UploadInChunks(Image& image);
 
+    /// Whether the guest data of an image about to be uploaded again is what it already holds.
+    [[nodiscard]] bool ContentUnchanged(Image& image);
+
     /// Large layered images whose refresh can decode only the layers written since the last one.
     [[nodiscard]] bool UploadsByLayer(const ImageBase& image) const noexcept;
 
