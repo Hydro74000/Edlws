@@ -25,6 +25,7 @@ add_executable(tests
     core/core_timing.cpp
     core/ldn.cpp
     core/malformed_containers.cpp
+    core/memory_range.cpp
     core/internal_network/socket_proxy.cpp
     core/nup_writer.cpp
     core/priority_queue.cpp

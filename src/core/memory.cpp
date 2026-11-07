@@ -1066,6 +1066,10 @@ bool Memory::IsValidVirtualAddress(const Common::ProcessAddress vaddr) const {
 
 bool Memory::IsValidVirtualAddressRange(Common::ProcessAddress base, u64 size) const {
     Common::ProcessAddress end = base + size;
+    // A range that wraps past the end of the address space would skip the loop below.
+    if (end < base) {
+        return false;
+    }
     Common::ProcessAddress page = Common::AlignDown(GetInteger(base), YUZU_PAGESIZE);
 
     for (; page < end; page += YUZU_PAGESIZE) {
