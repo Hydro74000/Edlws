@@ -65,7 +65,13 @@ VirtualFile RomFSFactory::OpenPatchedRomFSWithProgramIndex(u64 title_id, u8 prog
                                                            ContentRecordType type) const {
     const auto res_title_id = GetBaseTitleIDWithProgramIndex(title_id, program_index);
 
-    return OpenPatchedRomFS(res_title_id, type);
+    auto romfs = OpenPatchedRomFS(res_title_id, type);
+    if (romfs == nullptr && program_index == 0 && type == ContentRecordType::Program &&
+        !updatable) {
+        // A NUP or a loose dump isn't in the content provider: use the RomFS its loader made.
+        return file;
+    }
+    return romfs;
 }
 
 VirtualFile RomFSFactory::Open(u64 title_id, StorageId storage, ContentRecordType type) const {
