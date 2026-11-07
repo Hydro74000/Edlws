@@ -8,6 +8,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <optional>
 #include <span>
 #include <type_traits>
 #include "common/container/unordered_map.h"
@@ -216,14 +217,15 @@ public:
         // A title that counts without resetting or reporting grows the query by a slot at every
         // submission and render pass, and the query keeps every bank it touches alive. Ocarina of
         // Time's title screen and file select reached 16,384 slots over 64 banks (its gameplay
-        // windows span at most 36 slots). Past a bank, drop the count as a reset would.
+        // windows span at most 36 slots). Past a bank, the next sync folds the slots into the
+        // accumulated count, as it does for a report, and they go back.
         if (current_query && current_query->size_slots > SamplesQueryBank::BANK_SIZE) {
-            ResetCounter();
+            fold_requested = true;
         }
     }
 
     bool HasPendingSync() const override {
-        return !pending_sync.empty();
+        return !pending_sync.empty() || fold_requested;
     }
 
     void SyncWrites() override {
@@ -240,7 +242,9 @@ public:
     }
 
     void PresyncWrites() override {
-        if (pending_sync.empty()) {
+        // A reset since the request leaves nothing to fold.
+        const bool fold = std::exchange(fold_requested, false) && current_query;
+        if (pending_sync.empty() && !fold) {
             return;
         }
         PauseCounter();
@@ -249,7 +253,17 @@ public:
             driver_id == VK_DRIVER_ID_ARM_PROPRIETARY || driver_id == VK_DRIVER_ID_MESA_TURNIP) {
             pending_sync.clear();
             sync_values_stash.clear();
+            // Nothing accumulates on these: dropping the count is the only way to free its banks.
+            if (fold) {
+                ResetCounter();
+            }
             return;
+        }
+        // A report nobody reads, covering every slot so far: it makes the steps below accumulate.
+        std::optional<size_t> fold_query;
+        if (fold) {
+            fold_query = DuplicateCurrentQuery();
+            pending_sync.push_back(*fold_query);
         }
         sync_values_stash.clear();
         sync_values_stash.emplace_back();
@@ -297,6 +311,13 @@ public:
         for (auto q : pending_sync) {
             auto* query = GetQuery(q);
             size_t sync_value_slot = 0;
+            if (q == fold_query) {
+                if (!has_multi_queries) {
+                    has_multi_queries = true;
+                    sync_values_stash.emplace_back();
+                }
+                continue;
+            }
             if (True(query->flags & VideoCommon::QueryFlagBits::IsRewritten)) {
                 continue;
             }
@@ -348,6 +369,9 @@ public:
         last_accumulation_checkpoint = 0;
         accumulation_since_last_sync = has_multi_queries;
         pending_sync.clear();
+        if (fold_query) {
+            Free(*fold_query);
+        }
     }
 
     size_t WriteCounter(DAddr address, bool has_timestamp, u32 value,
@@ -523,13 +547,8 @@ private:
         current_query_id = 0;
     }
 
-    void ReplicateCurrentQueryIfNeeded() {
-        if (pending_sync.empty()) {
-            return;
-        }
-        if (!current_query) {
-            return;
-        }
+    /// A query over the current one's slots, without an address to report to.
+    size_t DuplicateCurrentQuery() {
         auto index = BuildQuery();
         auto* new_query = GetQuery(index);
         new_query->guest_address = 0;
@@ -542,6 +561,17 @@ private:
         ApplyBankOp(new_query, [](SamplesQueryBank* bank, size_t start, size_t amount) {
             bank->AddReference(amount);
         });
+        return index;
+    }
+
+    void ReplicateCurrentQueryIfNeeded() {
+        if (pending_sync.empty()) {
+            return;
+        }
+        if (!current_query) {
+            return;
+        }
+        const size_t index = DuplicateCurrentQuery();
         pending_flush_queries.push_back(index);
         std::function<void()> func([this, index] {
             auto* query = GetQuery(index);
@@ -614,6 +644,7 @@ private:
     size_t first_accumulation_checkpoint{};
     size_t last_accumulation_checkpoint{};
     bool accumulation_since_last_sync{};
+    bool fold_requested{};
     VideoCommon::HostQueryBase* current_query;
     bool has_started{};
     std::mutex flush_guard;
