@@ -112,6 +112,16 @@ public:
         return render_pass_has_stores;
     }
 
+    /// Whether a draw, clear or blit was recorded in the active render pass.
+    bool RenderPassHasWrites() const {
+        return render_pass_has_writes;
+    }
+
+    /// Whether the active render pass drops an attachment at its end (cleared MSAA).
+    bool RenderPassDiscards() const {
+        return render_pass_discards;
+    }
+
     bool IsRenderPassActive() const {
         return state.renderpass != VK_NULL_HANDLE;
     }
@@ -245,6 +255,8 @@ private:
     bool flush_pending{};
     bool fragment_barrier_pending{};
     bool render_pass_has_stores{};
+    bool render_pass_has_writes{};
+    bool render_pass_discards{};
 
     class Command {
     public:

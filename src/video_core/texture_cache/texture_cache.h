@@ -599,17 +599,23 @@ void TextureCache<P>::CheckFeedbackLoop(std::span<const ImageViewInOut> views) {
     if (!Settings::values.barrier_feedback_loops.GetValue()) {
         return;
     }
+    constexpr u8 FeedbackColor = 1;
+    constexpr u8 FeedbackDepth = 2;
     const auto& regs = maxwell3d->regs;
     const bool writes_depth_stencil = regs.depth_write_enabled != 0 || regs.stencil_enable != 0;
-    const auto barrier = [&] {
+    const auto barrier = [&](u8 feedback) {
 #ifdef __APPLE__
-        // Ending a render pass is costly on tile-based GPUs: only when depth or stencil changed.
-        if (!feedback_depth_dirty) {
-            return;
+        // Ending a render pass is costly on tile-based GPUs: for depth, only when it changed.
+        if (feedback == FeedbackDepth) {
+            if (!feedback_depth_dirty) {
+                return;
+            }
+            feedback_depth_dirty = false;
         }
-        feedback_depth_dirty = false;
 #endif
-        runtime.BarrierFeedbackLoop();
+        if (feedback != 0) {
+            runtime.BarrierFeedbackLoop();
+        }
     };
     SCOPE_EXIT {
         if (writes_depth_stencil) {
@@ -619,9 +625,7 @@ void TextureCache<P>::CheckFeedbackLoop(std::span<const ImageViewInOut> views) {
 
     if (render_targets_serial == last_feedback_loop_serial &&
         texture_bindings_serial == last_feedback_texture_serial) {
-        if (last_feedback_loop_result) {
-            barrier();
-        }
+        barrier(last_feedback_loop_result);
         return;
     }
     if (render_targets_serial != last_feedback_loop_serial) {
@@ -631,51 +635,44 @@ void TextureCache<P>::CheckFeedbackLoop(std::span<const ImageViewInOut> views) {
     if (rt_active_mask == 0) {
         last_feedback_loop_serial = render_targets_serial;
         last_feedback_texture_serial = texture_bindings_serial;
-        last_feedback_loop_result = false;
+        last_feedback_loop_result = 0;
         return;
     }
     const u32 depth_bit = 1u << NUM_RT;
     const bool depth_active = (rt_active_mask & depth_bit) != 0;
+    const auto overlaps = [](const SubresourceRange& lhs, const SubresourceRange& rhs) {
+        return lhs.base.level < rhs.base.level + rhs.extent.levels &&
+               rhs.base.level < lhs.base.level + lhs.extent.levels &&
+               lhs.base.layer < rhs.base.layer + rhs.extent.layers &&
+               rhs.base.layer < lhs.base.layer + lhs.extent.layers;
+    };
 
-    const bool requires_barrier = [&] {
-        for (const auto& view : views) {
-            if (!view.id) {
-                continue;
-            }
-
-            {
-                bool is_continue = false;
-                for (size_t i = 0; i < 8; ++i)
-                    is_continue |= (rt_active_mask & (1u << i)) && view.id == render_targets.color_buffer_ids[i];
-                if (is_continue)
-                    continue;
-            }
-
-            if (depth_active && view.id == render_targets.depth_buffer_id)
-                continue;
-
-            const ImageId view_image_id = slot_image_views[view.id].image_id;
-            {
-                bool is_continue = false;
-                for (size_t i = 0; i < 8; ++i)
-                    is_continue |= (rt_active_mask & (1u << i)) && view_image_id == rt_image_id[i];
-                if (is_continue)
-                    continue;
-            }
-            if (depth_active && view_image_id == rt_depth_image_id) {
-                return true;
+    u8 feedback = 0;
+    for (const auto& view : views) {
+        if (!view.id) {
+            continue;
+        }
+        const ImageView& sampled = slot_image_views[view.id];
+        // A colour target read in the draw that may write it, through any view of the same
+        // subresources: the earlier draws of the pass wrote what it reads (DK's tutorial movie
+        // applies its gamma in place, and read data the render pass hadn't made visible yet).
+        for (size_t i = 0; i < NUM_RT; ++i) {
+            if ((rt_active_mask & (1u << i)) != 0 && sampled.image_id == rt_image_id[i] &&
+                overlaps(sampled.range, slot_image_views[render_targets.color_buffer_ids[i]].range)) {
+                feedback |= FeedbackColor;
             }
         }
-
-        return false;
-    }();
+        // Depth: another view of the depth target (the view itself is left out, #3338).
+        if (depth_active && view.id != render_targets.depth_buffer_id &&
+            sampled.image_id == rt_depth_image_id) {
+            feedback |= FeedbackDepth;
+        }
+    }
 
     last_feedback_loop_serial = render_targets_serial;
     last_feedback_texture_serial = texture_bindings_serial;
-    last_feedback_loop_result = requires_barrier;
-    if (requires_barrier) {
-        barrier();
-    }
+    last_feedback_loop_result = feedback;
+    barrier(feedback);
 }
 
 template <class P>

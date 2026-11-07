@@ -1435,6 +1435,12 @@ void TextureCacheRuntime::EraseResolveShadow(VkImage msaa_image) {
 }
 
 void TextureCacheRuntime::BarrierFeedbackLoop() {
+    // Ending the render pass makes what its earlier draws wrote visible to the reads of the next
+    // one (Scheduler::EndRenderPass). With nothing written yet, the reads already see the last
+    // pass; one that drops an attachment at its end can't end early without losing the drawing.
+    if (!scheduler.RenderPassHasWrites() || scheduler.RenderPassDiscards()) {
+        return;
+    }
     scheduler.RequestOutsideRenderPassOperationContext();
 }
 

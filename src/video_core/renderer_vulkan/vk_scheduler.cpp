@@ -238,6 +238,7 @@ void Scheduler::RealizeDeferredClear() {
         dc.color_clear_mask, dc.depth_stencil, color_discard_mask, depth_stencil_discard);
     EndRenderPass();
     BeginRenderPassImpl(dc.framebuffer, renderpass, clear_values.data(), count);
+    render_pass_discards = color_discard_mask != 0 || depth_stencil_discard;
 }
 
 bool Scheduler::DeferColorClear(const Framebuffer* framebuffer, u32 rt_slot,
@@ -278,8 +279,10 @@ void Scheduler::FlushDeferredClear() {
 }
 
 void Scheduler::RequestRenderpass(const Framebuffer* framebuffer) {
+    // Every write into a render pass asks for it first.
     if (deferred_clear.framebuffer == framebuffer) {
         RealizeDeferredClear();
+        render_pass_has_writes = true;
         return;
     }
     const VkRenderPass renderpass = framebuffer->RenderPass();
@@ -288,11 +291,13 @@ void Scheduler::RequestRenderpass(const Framebuffer* framebuffer) {
     if (renderpass == state.renderpass && framebuffer_handle == state.framebuffer &&
         render_area.width == state.render_area.width &&
         render_area.height == state.render_area.height) {
+        render_pass_has_writes = true;
         return;
     }
     // Ends any active pass and realizes a deferred clear
     EndRenderPass();
     BeginRenderPassImpl(framebuffer, renderpass, nullptr, 0);
+    render_pass_has_writes = true;
 }
 
 void Scheduler::RequestOutsideRenderPassOperationContext() {
@@ -491,6 +496,8 @@ void Scheduler::EndRenderPass()
 
         fragment_barrier_pending = false;
         render_pass_has_stores = false;
+        render_pass_has_writes = false;
+        render_pass_discards = false;
 
         query_cache->CounterClose(VideoCommon::QueryType::StreamingByteCount);
 
