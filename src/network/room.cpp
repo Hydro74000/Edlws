@@ -12,6 +12,7 @@
 #include <shared_mutex>
 #include <sstream>
 #include <thread>
+#include <fmt/format.h>
 #include "common/polyfill_thread.h"
 #include "common/logging.h"
 #include "enet/enet.h"
@@ -32,6 +33,9 @@ public:
     mutable std::mutex verify_uid_mutex; ///< Mutex for verify_uid
 
     std::string password; ///< The password required to connect to this room.
+
+    /// Takes the place of the password for whoever hosts the room (Room::GetHostSecret).
+    std::string host_secret;
 
     struct Member {
         std::string nickname; ///< The nickname of the member.
@@ -343,7 +347,10 @@ void Room::RoomImpl::HandleJoinRequest(const ENetEvent* event) {
     std::string token;
     packet.Read(token);
 
-    if (pass != password) {
+    // Moderators are told apart by this alone: a nickname is whatever a client says it is, and the
+    // token stays what verification needs. See Room::GetHostSecret.
+    const bool is_host = pass == host_secret;
+    if (pass != password && !is_host) {
         SendWrongPassword(event->peer);
         return;
     }
@@ -384,9 +391,9 @@ void Room::RoomImpl::HandleJoinRequest(const ENetEvent* event) {
     if (verify_backend != nullptr)
      member.user_data = verify_backend->LoadUserData(uid, token);
 
-    if (nickname == room_information.host_username) {
+    if (is_host) {
         member.user_data.moderator = true;
-        LOG_INFO(Network, "User {} is a moderator", std::string(room_information.host_username));
+        LOG_INFO(Network, "User {} is a moderator", nickname);
     }
 
     std::string ip;
@@ -1079,7 +1086,7 @@ bool Room::Create(const std::string& name, const std::string& description,
                   const u32 max_connections, const std::string& host_username,
                   const GameInfo preferred_game,
                   std::unique_ptr<VerifyUser::Backend> verify_backend,
-                  const Room::BanList& ban_list) {
+                  const Room::BanList& ban_list, const std::string& moderator_password) {
     ENetAddress address;
     address.host = ENET_HOST_ANY;
     if (!server_address.empty()) {
@@ -1102,6 +1109,12 @@ bool Room::Create(const std::string& name, const std::string& description,
     room_impl->room_information.preferred_game = preferred_game;
     room_impl->room_information.host_username = host_username;
     room_impl->password = password;
+    room_impl->host_secret = moderator_password;
+    if (moderator_password.empty()) {
+        std::random_device device;
+        std::mt19937_64 random{(u64{device()} << 32) | device()};
+        room_impl->host_secret = fmt::format("{:016x}{:016x}", random(), random());
+    }
     room_impl->verify_backend = std::move(verify_backend);
     room_impl->username_ban_list = ban_list.first;
     room_impl->ip_ban_list = ban_list.second;
@@ -1116,6 +1129,10 @@ Room::State Room::GetState() const {
 
 const RoomInformation& Room::GetRoomInformation() const {
     return room_impl->room_information;
+}
+
+std::string Room::GetHostSecret() const {
+    return room_impl->host_secret;
 }
 
 std::string Room::GetVerifyUID() const {

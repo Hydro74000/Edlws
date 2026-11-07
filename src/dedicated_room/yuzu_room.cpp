@@ -59,6 +59,7 @@ static void PrintHelp(const char* argv0) {
              "-p, --port              The port used for the room\n"
              "-m, --max-members       The maximum number of players for this room\n"
              "-w, --password          The password for the room\n"
+             "-o, --moderator-password  Joining with this instead of the password gives moderation\n"
              "-g, --preferred-game    The preferred game for this room\n"
              "-i, --preferred-game-id The preferred game-id for this room\n"
              "-u, --username          The username used for announce\n"
@@ -183,6 +184,7 @@ void LaunchRoom(int argc, char** argv, bool called_by_option) {
     std::string room_name;
     std::string room_description;
     std::string password;
+    std::string moderator_password;
     std::string preferred_game;
     std::string username;
     std::string token;
@@ -201,6 +203,7 @@ void LaunchRoom(int argc, char** argv, bool called_by_option) {
         {"port", required_argument, 0, 'p'},
         {"max-members", required_argument, 0, 'm'},
         {"password", required_argument, 0, 'w'},
+        {"moderator-password", required_argument, 0, 'o'},
         {"preferred-game", required_argument, 0, 'g'},
         {"preferred-game-id", required_argument, 0, 'i'},
         {"username", optional_argument, 0, 'u'},
@@ -220,7 +223,7 @@ void LaunchRoom(int argc, char** argv, bool called_by_option) {
     Common::Log::Start();
 
     while (optind < argc) {
-        int arg = getopt_long(argc, argv, "n:d:s:p:m:w:g:u:t:a:i:l:hv", long_options, &option_index);
+        int arg = getopt_long(argc, argv, "n:d:s:p:m:w:o:g:u:t:a:i:l:hv", long_options, &option_index);
         if (arg != -1) {
             char carg = static_cast<char>(arg);
 
@@ -242,6 +245,9 @@ void LaunchRoom(int argc, char** argv, bool called_by_option) {
                 break;
             case 'w':
                 password.assign(optarg);
+                break;
+            case 'o':
+                moderator_password.assign(optarg);
                 break;
             case 'g':
                 preferred_game.assign(optarg);
@@ -362,7 +368,7 @@ void LaunchRoom(int argc, char** argv, bool called_by_option) {
                                                               .id = preferred_game_id};
         if (!room->Create(room_name, room_description, bind_address, static_cast<u16>(port),
                           password, max_members, username, preferred_game_info,
-                          std::move(verify_backend), ban_list)) {
+                          std::move(verify_backend), ban_list, moderator_password)) {
             LOG_INFO(Network, "Failed to create room: ");
             std::exit(-1);
         }

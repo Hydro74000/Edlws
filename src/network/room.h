@@ -102,6 +102,12 @@ public:
     std::string GetVerifyUID() const;
 
     /**
+     * Gets what makes a member joining with it as a password a moderator of the room: the moderator
+     * password it was created with, or a random secret for the host's own client to join with.
+     */
+    std::string GetHostSecret() const;
+
+    /**
      * Gets a list of the mbmers connected to the room.
      */
     std::vector<Member> GetRoomMemberList() const;
@@ -126,7 +132,7 @@ public:
                 const u32 max_connections = MaxConcurrentConnections,
                 const std::string& host_username = "", const GameInfo = {},
                 std::unique_ptr<VerifyUser::Backend> verify_backend = nullptr,
-                const BanList& ban_list = {});
+                const BanList& ban_list = {}, const std::string& moderator_password = "");
 
     /**
      * Sets the verification GUID of the room.

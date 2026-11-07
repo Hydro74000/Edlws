@@ -225,7 +225,7 @@ NetPlayStatus AndroidMultiplayer::NetPlayCreateRoom(const std::string &ipaddress
 #endif
 
     member->Join(username, ipaddress.c_str(), static_cast<u16>(port), 0, Network::NoPreferredIP,
-                 password, token);
+                 room->GetHostSecret(), token);
 
     // Failsafe timer to avoid joining before creation
     for (int i = 0; i < 5; i++) {

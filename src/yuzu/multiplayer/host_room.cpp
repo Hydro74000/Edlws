@@ -217,9 +217,13 @@ void HostRoomWindow::Host() {
             }
         }
 #endif
+        std::string join_password = password;
+        if (auto room = Network::GetRoom().lock()) {
+            join_password = room->GetHostSecret();
+        }
         // TODO: Check what to do with this
         member->Join(ui->username->text().toStdString(), "127.0.0.1", port, 0,
-                     Network::NoPreferredIP, password, token);
+                     Network::NoPreferredIP, join_password, token);
 
         // Store settings
         UISettings::values.multiplayer_room_nickname = ui->username->text().toStdString();

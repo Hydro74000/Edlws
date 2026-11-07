@@ -33,6 +33,7 @@ Only the Qt frontend supports the following arguments:
 - `-p/--port`: The port used for the room.
 - `-m/--max-members`: The maximum number of players for this room.
 - `-w/--password`: The password for the room.
+- `-o/--moderator-password`: Joining with this instead of the password makes you a moderator of the room.
 - `-g/--preferred-game`: The preferred game for this room.
 - `-i/--preferred-game-id`: The preferred game-id for this room.
 - `-u/--username`: The username used for announce.
