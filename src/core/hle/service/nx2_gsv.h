@@ -2824,15 +2824,6 @@ private:
         TipcReplyWords(ctx, {});
     }
 
-    static bool PacingEnabled() {
-        // EDEN_NX2_VDEC_PACE=0: hand out every decoded frame, however late.
-        static const bool enabled = [] {
-            const char* value = std::getenv("EDEN_NX2_VDEC_PACE");
-            return value == nullptr || value[0] != '0';
-        }();
-        return enabled;
-    }
-
     static s64 HostTimeUs() {
         return std::chrono::duration_cast<std::chrono::microseconds>(
                    std::chrono::steady_clock::now().time_since_epoch())
@@ -2872,7 +2863,7 @@ private:
     // (m_mutex held). Returns true when the only frame left is late and more input is queued:
     // decode on before filling an image.
     bool DropOvertakenFrames() {
-        if (!PacingEnabled() || m_decoded.empty()) {
+        if (m_decoded.empty()) {
             return false;
         }
         const auto due = DuePts();
