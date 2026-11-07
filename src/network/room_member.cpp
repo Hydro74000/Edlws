@@ -312,8 +312,11 @@ void RoomMember::RoomMemberImpl::HandleRoomInformationPacket(const ENetEvent* ev
     room_information.preferred_game = info.preferred_game;
     room_information.host_username = info.host_username;
 
-    u32 num_members;
+    u32 num_members{};
     packet.Read(num_members);
+    if (!packet || num_members > MaxConcurrentConnections) {
+        return;
+    }
     member_information.resize(num_members);
 
     for (auto& member : member_information) {
@@ -374,6 +377,9 @@ void RoomMember::RoomMemberImpl::HandleProxyPackets(const ENetEvent* event) {
 
     packet.Read(proxy_packet.broadcast);
     packet.Read(proxy_packet.data);
+    if (!packet) {
+        return;
+    }
 
     Invoke<ProxyPacket>(proxy_packet);
 }
@@ -395,6 +401,9 @@ void RoomMember::RoomMemberImpl::HandleLdnPackets(const ENetEvent* event) {
     packet.Read(ldn_packet.broadcast);
 
     packet.Read(ldn_packet.data);
+    if (!packet) {
+        return;
+    }
 
     Invoke<LDNPacket>(ldn_packet);
 }

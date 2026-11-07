@@ -50,6 +50,7 @@ add_executable(tests
     video_core/indirect_reset.cpp
     video_core/block_linear_gob_copy.cpp
     input_common/calibration_configuration_job.cpp
+    network/packet.cpp
     qt_common/game_discovery.cpp
 )
 

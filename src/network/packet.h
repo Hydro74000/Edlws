@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <vector>
 #include "common/common_types.h"
@@ -121,6 +122,12 @@ Packet& Packet::Read(std::vector<T>& out_data) {
     // First extract the size
     u32 size = 0;
     Read(size);
+    // Each element takes a byte at least, so a length past the packet's end is worth no allocation.
+    if (!is_valid || size > data.size() - (std::min)(read_pos, data.size())) {
+        is_valid = false;
+        out_data.clear();
+        return *this;
+    }
     out_data.resize(size);
 
     // Then extract the data
