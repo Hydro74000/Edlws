@@ -65,9 +65,9 @@ public:
 
     void FlushRegion(VAddr addr, std::size_t size) {
         bool result = false;
+        // Every dirty query in the range is written, so this walk never stops early.
         IterateCache<false>(addr, size, [this, &result](QueryLocation location) {
             result |= SemiFlushQueryDirty(location);
-            return result;
         });
         if (result) {
             RequestGuestHostSync();
@@ -125,7 +125,7 @@ protected:
     template <bool remove_from_cache, typename Func>
     void IterateCache(VAddr addr, std::size_t size, Func&& func) {
         static constexpr bool RETURNS_BOOL =
-            std::is_same_v<std::invoke_result<Func, QueryLocation>, bool>;
+            std::is_same_v<std::invoke_result_t<Func, QueryLocation>, bool>;
         const u64 addr_begin = addr;
         const u64 addr_end = addr_begin + size;
 

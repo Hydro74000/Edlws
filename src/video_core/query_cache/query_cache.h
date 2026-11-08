@@ -134,7 +134,7 @@ struct QueryCacheBase<Traits>::QueryCacheBaseImpl {
     template <typename Func>
     void ForEachStreamerIn(u64 mask, Func&& func) {
         static constexpr bool RETURNS_BOOL =
-            std::is_same_v<std::invoke_result<Func, StreamerInterface*>, bool>;
+            std::is_same_v<std::invoke_result_t<Func, StreamerInterface*>, bool>;
         while (mask != 0) {
             size_t position = std::countr_zero(mask);
             mask &= ~(1ULL << position);
