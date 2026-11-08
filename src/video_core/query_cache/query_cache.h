@@ -329,6 +329,7 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
     auto [cont_addr, base] = gen_caching_indexing(cpu_addr);
     {
         std::scoped_lock lock(cache_mutex);
+        query_pages.Mark(cont_addr);
         auto it1 = cached_queries.try_emplace(cont_addr);
         auto& sub_container = it1.first->second;
         auto it_current = sub_container.find(base);

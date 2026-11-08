@@ -19,6 +19,7 @@
 #include "video_core/control/channel_state_cache.h"
 #include "video_core/host1x/gpu_device_memory_manager.h"
 #include "video_core/query_cache/query_base.h"
+#include "video_core/query_cache/query_page_filter.h"
 #include "video_core/query_cache/types.h"
 
 namespace VideoCore {
@@ -129,6 +130,10 @@ protected:
         const u64 addr_end = addr_begin + size;
 
         const u64 page_end = addr_end >> Core::DEVICE_PAGEBITS;
+        // Inline writes and CPU write traps invalidate pages that almost never hold a query.
+        if (!query_pages.MayHold(addr_begin >> Core::DEVICE_PAGEBITS, page_end)) {
+            return;
+        }
         std::scoped_lock lock(cache_mutex);
         for (u64 page = addr_begin >> Core::DEVICE_PAGEBITS; page <= page_end; ++page) {
             const u64 page_start = page << Core::DEVICE_PAGEBITS;
@@ -178,6 +183,7 @@ protected:
     void UnregisterPending();
 
     ::Common::unordered_map<u64, ::Common::unordered_map<u32, QueryLocation>> cached_queries;
+    QueryPageFilter query_pages; ///< Pages of cached_queries, readable without cache_mutex
     std::mutex cache_mutex;
 
     struct QueryCacheBaseImpl;
