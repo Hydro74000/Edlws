@@ -106,7 +106,9 @@ public:
     bool AccelerateHostConditionalRendering();
 
     // Async downloads
-    void CommitAsyncFlushes();
+    /// Commits the queries a new fence downloads. True if there are some: the fence must then
+    /// reach the host GPU, and the queries committed here include those NotifyWFI adds.
+    [[nodiscard]] bool CommitAsyncFlushes();
 
     bool HasUncommittedFlushes() const;
 

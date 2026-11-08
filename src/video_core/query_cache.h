@@ -199,10 +199,13 @@ public:
         return streams[static_cast<std::size_t>(type)];
     }
 
-    void CommitAsyncFlushes() {
+    /// True if this fence has downloads to wait for.
+    [[nodiscard]] bool CommitAsyncFlushes() {
         std::unique_lock lock{mutex};
+        const bool committed = uncommitted_flushes != nullptr;
         committed_flushes.push_back(uncommitted_flushes);
         uncommitted_flushes.reset();
+        return committed;
     }
 
     bool HasUncommittedFlushes() const {

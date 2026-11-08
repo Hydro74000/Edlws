@@ -184,6 +184,15 @@ void Scheduler::BeginRenderPassImpl(const Framebuffer* framebuffer, VkRenderPass
         GPU::Logging::GPULogger::GetInstance().LogRenderPassBegin(render_pass_info);
     }
 
+    // A query begins and ends in the same render pass instance, or both outside one. EndRenderPass
+    // pauses the samples counter, so it runs here only if it started outside a pass (a clear
+    // deferred to this pass's load ops, DrawTexture before its blit): end it before the pass
+    // begins, and the next draw starts it again inside. Ended in the pass instead, its result
+    // could never become available, and the fencing thread waited for it forever.
+    if (query_cache) {
+        query_cache->CounterEnable(VideoCommon::QueryType::ZPassPixelCount64, false);
+    }
+
     std::array<VkClearValue, 9> values{};
     for (u32 i = 0; i < clear_value_count && i < values.size(); ++i) {
         values[i] = clear_values[i];

@@ -475,7 +475,7 @@ bool QueryCacheBase<Traits>::AccelerateHostConditionalRendering() {
 
 // Async downloads
 template <typename Traits>
-void QueryCacheBase<Traits>::CommitAsyncFlushes() {
+bool QueryCacheBase<Traits>::CommitAsyncFlushes() {
     // Make sure to have the results synced in Host.
     NotifyWFI();
 
@@ -493,7 +493,7 @@ void QueryCacheBase<Traits>::CommitAsyncFlushes() {
     std::function<void()> func([this] { UnregisterPending(); });
     impl->rasterizer.SyncOperation(std::move(func));
     if (mask == 0) {
-        return;
+        return false;
     }
     u64 ran_mask = ~mask;
     while (mask) {
@@ -508,6 +508,7 @@ void QueryCacheBase<Traits>::CommitAsyncFlushes() {
             streamer->PushUnsyncedQueries();
         });
     }
+    return true;
 }
 
 template <typename Traits>
