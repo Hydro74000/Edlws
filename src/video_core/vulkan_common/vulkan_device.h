@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstdlib>
@@ -406,9 +407,13 @@ public:
         return properties.properties.limits.minUniformBufferOffsetAlignment;
     }
 
-    /// Returns storage alignment requirement.
+    /// Returns the alignment of storage buffer bindings: the device's, but at least 16. Shaders
+    /// index a binding's 64- and 128-bit vector views with offset >> 3 and >> 4, which reads the
+    /// previous vector when the binding starts only 4-aligned (RADV). The buffer cache, the
+    /// shader translation and the compute passes all read this value.
     VkDeviceSize GetStorageBufferAlignment() const {
-        return properties.properties.limits.minStorageBufferOffsetAlignment;
+        return std::max<VkDeviceSize>(
+            properties.properties.limits.minStorageBufferOffsetAlignment, 16);
     }
 
     /// Returns the maximum range for storage buffers.
