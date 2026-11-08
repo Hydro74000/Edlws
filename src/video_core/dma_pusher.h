@@ -7,6 +7,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <condition_variable>
 #include <optional>
 #include <span>
@@ -260,10 +261,12 @@ public:
 
     VideoCore::RasterizerInterface* rasterizer = nullptr;
 
-    const bool ib_enable : 1 = true; ///< IB mode enabled
-    bool dma_increment_once : 1 = false;
-    bool signal_sync : 1 = false;
-    bool synced : 1 = false;
+    // Not bit-fields: the fence callback sets synced, and a bit-field store would rewrite the byte
+    // it shares with dma_increment_once and signal_sync.
+    const bool ib_enable = true; ///< IB mode enabled
+    bool dma_increment_once = false;
+    bool signal_sync = false;
+    std::atomic<bool> synced{false};
 };
 
 } // namespace Tegra
