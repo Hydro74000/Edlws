@@ -142,10 +142,12 @@ protected:
                 continue;
             }
             auto& contents = it->second;
+            bool matched = false;
             for (auto& query : contents) {
                 if (!in_range(query.first)) {
                     continue;
                 }
+                matched = true;
                 if constexpr (RETURNS_BOOL) {
                     if (func(query.second)) {
                         return;
@@ -154,7 +156,11 @@ protected:
                     func(query.second);
                 }
             }
+            // A second pass over the page only to erase what the first found.
             if constexpr (remove_from_cache) {
+                if (!matched) {
+                    continue;
+                }
                 const auto in_range2 = [&](const std::pair<u32, QueryLocation>& pair) {
                     return in_range(pair.first);
                 };
