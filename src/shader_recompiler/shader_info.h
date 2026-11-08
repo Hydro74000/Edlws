@@ -375,6 +375,9 @@ struct Info {
     /// Texture handles the shader reads from storage buffers, as programs over constant buffer
     /// and storage buffer words (see EvaluateHandleProgram), evaluated for each draw.
     std::vector<std::vector<u32>> handle_programs;
+    /// Their storage offsets are relative to the buffer address aligned down to this, as the
+    /// shader's own storage accesses are (the host storage buffer alignment, StorageOffset).
+    u32 handle_storage_alignment{1};
     ImageDescriptors image_descriptors;
 };
 
