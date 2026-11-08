@@ -1742,15 +1742,7 @@ private:
             const char* value = std::getenv("EDEN_NX2_FRAMES_AHEAD");
             return value == nullptr ? -1 : value[0] == '1' ? 1 : 0;
         }();
-        // Donkey Kong Bananza's channels wait on each other every frame, so it always ran a frame
-        // ahead, where it rewrote memory the GPU thread hadn't read yet (misread commands, then
-        // a freeze or crash; rubberbanding while moving). Title 1 runs ahead without either.
-        constexpr u64 DonkeyKongBananzaProgramId = 0x040074A01BF12000ULL;
-        int frames_ahead = frames_ahead_setting;
-        if (frames_ahead == -1 &&
-            system.GetApplicationProcessProgramID() == DonkeyKongBananzaProgramId) {
-            frames_ahead = 0;
-        }
+        const int frames_ahead = frames_ahead_setting;
         const auto entered = std::chrono::steady_clock::now();
         NoteFrameTime(entered);
         ChooseFrameWait();
