@@ -33,6 +33,7 @@ add_executable(tests
     video_core/memory_tracker.cpp
     video_core/invalidation_accumulator.cpp
     video_core/texture_handles.cpp
+    video_core/maxwell_fmz.cpp
     video_core/h264_packet.cpp
     video_core/vertex_repack.cpp
     video_core/ampere_lowering.cpp
