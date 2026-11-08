@@ -31,6 +31,7 @@ add_executable(tests
     core/priority_queue.cpp
     core/internal_network/network.cpp
     video_core/memory_tracker.cpp
+    video_core/invalidation_accumulator.cpp
     video_core/h264_packet.cpp
     video_core/vertex_repack.cpp
     video_core/ampere_lowering.cpp
