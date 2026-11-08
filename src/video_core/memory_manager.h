@@ -62,6 +62,17 @@ public:
         return unique_identifier;
     }
 
+    /// Changes after every Map, MapSparse and Unmap of this address space.
+    [[nodiscard]] u64 MapSerial() const noexcept {
+        return map_serial.load(std::memory_order_acquire);
+    }
+
+    /// Changes whenever this address space or the device memory behind it is mapped or unmapped:
+    /// a host pointer GetPointer returned is only good while it stays the same.
+    [[nodiscard]] u64 HostPointerSerial() const noexcept {
+        return MapSerial() + memory.TranslationGeneration();
+    }
+
     /// Binds a renderer to the memory manager.
     void BindRasterizer(VideoCore::RasterizerInterface* rasterizer);
 
@@ -204,6 +215,7 @@ private:
     std::atomic<GPUVAddr> native_syncpoint_shim{};
     Core::System& system;
     MaxwellDeviceMemoryManager& memory;
+    std::atomic<u64> map_serial{};
 
     const u64 address_space_bits;
     GPUVAddr split_address;
