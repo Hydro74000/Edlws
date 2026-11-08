@@ -602,9 +602,11 @@ struct System::Impl {
     std::atomic_bool is_powered_on{};
     bool is_multicore : 1 = false;
     bool extended_memory_layout : 1 = false;
-    bool exit_locked : 1 = false;
-    bool exit_requested : 1 = false;
-    bool nvdec_active : 1 = false;
+    // Not bit-fields: service, NVDEC and frontend threads set them, and a bit-field store
+    // rewrites the byte the others share.
+    std::atomic_bool exit_locked{};
+    std::atomic_bool exit_requested{};
+    std::atomic_bool nvdec_active{};
 
     void EnsureGeneralChannelInitialized(System& system) {
         if (!general_channel_event) {
