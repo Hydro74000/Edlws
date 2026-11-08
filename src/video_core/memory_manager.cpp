@@ -215,15 +215,20 @@ void MemoryManager::BindRasterizer(VideoCore::RasterizerInterface* rasterizer_) 
 }
 
 GPUVAddr MemoryManager::Map(GPUVAddr gpu_addr, DAddr dev_addr, std::size_t size, PTEKind kind, bool is_big_pages) {
-    if (is_big_pages)
-        return BigPageTableOp(gpu_addr, dev_addr, size, kind, EntryType::Mapped);
-    return PageTableOp(gpu_addr, dev_addr, size, kind, EntryType::Mapped);
+    const GPUVAddr result = is_big_pages
+                                ? BigPageTableOp(gpu_addr, dev_addr, size, kind, EntryType::Mapped)
+                                : PageTableOp(gpu_addr, dev_addr, size, kind, EntryType::Mapped);
+    // After the tables changed: a reader that sees the old serial read the old tables.
+    map_serial.fetch_add(1, std::memory_order_release);
+    return result;
 }
 
 GPUVAddr MemoryManager::MapSparse(GPUVAddr gpu_addr, std::size_t size, bool is_big_pages) {
-    if (is_big_pages)
-        return BigPageTableOp(gpu_addr, 0, size, PTEKind::INVALID, EntryType::Reserved);
-    return PageTableOp(gpu_addr, 0, size, PTEKind::INVALID, EntryType::Reserved);
+    const GPUVAddr result =
+        is_big_pages ? BigPageTableOp(gpu_addr, 0, size, PTEKind::INVALID, EntryType::Reserved)
+                     : PageTableOp(gpu_addr, 0, size, PTEKind::INVALID, EntryType::Reserved);
+    map_serial.fetch_add(1, std::memory_order_release);
+    return result;
 }
 
 void MemoryManager::Unmap(GPUVAddr gpu_addr, std::size_t size) {
@@ -239,6 +244,7 @@ void MemoryManager::Unmap(GPUVAddr gpu_addr, std::size_t size) {
 
     BigPageTableOp(gpu_addr, 0, size, PTEKind::INVALID, EntryType::Free);
     PageTableOp(gpu_addr, 0, size, PTEKind::INVALID, EntryType::Free);
+    map_serial.fetch_add(1, std::memory_order_release);
 }
 
 std::optional<DAddr> MemoryManager::GpuToCpuAddress(GPUVAddr gpu_addr) const {

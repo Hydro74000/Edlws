@@ -687,6 +687,22 @@ void RasterizerVulkan::Draw(bool is_indexed, u32 instance_count) {
                      regs.blend.enable[0], seen.size());
         }
     }
+    // A direct draw with no vertices, or no instances outside task/mesh pipelines, records
+    // nothing. Skip it before the pipeline, buffer and descriptor work: dirty state, cached
+    // writes, deferred clears and query counter toggles stay pending for the next recorded draw,
+    // clear or render pass end, which apply them before anything can observe them. With
+    // transform feedback on the draw goes through, since its counters are begun and closed
+    // around draws.
+    if (maxwell3d->regs.transform_feedback_enabled == 0 &&
+        (MakeDrawParams(maxwell3d->draw_manager.draw_state, instance_count, is_indexed)
+                 .num_vertices == 0 ||
+         (instance_count == 0 && [this] {
+             const GraphicsPipeline* const pipeline = pipeline_cache.CurrentGraphicsPipeline();
+             return pipeline != nullptr && !pipeline->IsMeshPipeline();
+         }()))) {
+        gpu.TickWork();
+        return;
+    }
     PrepareDraw(is_indexed, [this, is_indexed, instance_count] {
         const auto& draw_state = maxwell3d->draw_manager.draw_state;
         const u32 num_instances{instance_count};
@@ -1257,7 +1273,17 @@ void RasterizerVulkan::InnerInvalidation(std::span<const std::pair<DAddr, std::s
     if (Settings::values.skip_cpu_inner_invalidation.GetValue()) {
         return;
     }
-    {
+    // The GPU's own cached writes (constant buffer data, every draw): most land where no image
+    // or shader was ever registered, which page_filter tells without the caches' locks.
+    const auto any = [&](const VideoCommon::PageFilter& filter) {
+        for (const auto& [addr, size] : sequences) {
+            if (filter.Any(addr, size)) {
+                return true;
+            }
+        }
+        return false;
+    };
+    if (any(texture_cache.page_filter)) {
         std::scoped_lock lock{texture_cache.mutex};
         for (const auto& [addr, size] : sequences) {
             texture_cache.WriteMemory(addr, size);
@@ -1272,7 +1298,9 @@ void RasterizerVulkan::InnerInvalidation(std::span<const std::pair<DAddr, std::s
     for (const auto& [addr, size] : sequences) {
         query_cache.InvalidateRegion(addr, size);
     }
-    pipeline_cache.InvalidateRegions(sequences);
+    if (any(pipeline_cache.page_filter)) {
+        pipeline_cache.InvalidateRegions(sequences);
+    }
 }
 
 bool RasterizerVulkan::OnCPUWrite(DAddr addr, u64 size) {
