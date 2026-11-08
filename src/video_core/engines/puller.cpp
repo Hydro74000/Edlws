@@ -105,6 +105,16 @@ bool Puller::CanResumeAcquire(DmaPusher& dma_pusher) {
     if (pending_acquire->Matches(current)) {
         return true;
     }
+    // A release queued after the acquire released the fences can sit among the operations that
+    // wait for the next fence (a semaphore release at High GPU accuracy goes through
+    // SyncOperation). With every channel waiting none is made: make one now and then, while some
+    // wait. The next check reads what it released.
+    if (const auto now = std::chrono::steady_clock::now();
+        now - pending_acquire->last_fences >= std::chrono::milliseconds{1} &&
+        dma_pusher.rasterizer->HasOperationsAwaitingFence()) {
+        pending_acquire->last_fences = now;
+        ReleaseFencesOnBack(dma_pusher);
+    }
     if (!pending_acquire->reported &&
         std::chrono::steady_clock::now() - pending_acquire->since > std::chrono::seconds{2}) {
         pending_acquire->reported = true;
@@ -249,6 +259,7 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
             .value = regs.semaphore_sequence,
             .operation = static_cast<u32>(op),
             .since = std::chrono::steady_clock::now(),
+            .last_fences = std::chrono::steady_clock::now(),
             .reported = false,
         };
         if (op != GpuSemaphoreOperation::AcquireEqual && op != GpuSemaphoreOperation::AcquireGequal &&
