@@ -79,6 +79,12 @@ public:
         uncommitted_operations.emplace_back(std::move(func));
     }
 
+    /// Operations queued by SyncOperation that wait for the next fence to be made.
+    [[nodiscard]] bool HasOperationsAwaitingFence() {
+        std::scoped_lock lock{uncommitted_guard};
+        return !uncommitted_operations.empty();
+    }
+
     void SignalFence(std::function<void()>&& func) {
         Nx2Profile::Scope profile_scope{Nx2Profile::Zone::Fence};
         const bool delay_fence = Settings::IsGPUFenceBehaviorDefault() ? Settings::IsGPULevelHigh() : Settings::IsGPUFenceBehaviorBalanced() || Settings::IsGPUFenceBehaviorAccurate();

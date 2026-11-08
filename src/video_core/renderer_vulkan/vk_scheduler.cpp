@@ -310,7 +310,11 @@ void Scheduler::RequestRenderpass(const Framebuffer* framebuffer, u32 write_mask
     const VkRenderPass renderpass = framebuffer->RenderPass();
     const VkFramebuffer framebuffer_handle = framebuffer->Handle();
     const VkExtent2D render_area = framebuffer->RenderArea();
-    if (renderpass == state.renderpass && framebuffer_handle == state.framebuffer &&
+    // The active pass goes on for the same framebuffer and area whichever variant began it: a
+    // deferred clear's variant differs only in load and store ops, applied at its begin and end.
+    // Comparing it with the base pass ended the pass at the next draw, which loaded what the clear
+    // had just written. EndRenderPass keeps state.framebuffer, so only an active pass goes on.
+    if (state.renderpass != VK_NULL_HANDLE && framebuffer_handle == state.framebuffer &&
         render_area.width == state.render_area.width &&
         render_area.height == state.render_area.height) {
         render_pass_write_mask |= write_mask;

@@ -1400,6 +1400,10 @@ void RasterizerVulkan::SyncOperation(std::function<void()>&& func) {
     fence_manager.SyncOperation(std::move(func));
 }
 
+bool RasterizerVulkan::HasOperationsAwaitingFence() {
+    return fence_manager.HasOperationsAwaitingFence();
+}
+
 void RasterizerVulkan::SignalSyncPoint(u32 value) {
     fence_manager.SignalSyncPoint(value);
 }

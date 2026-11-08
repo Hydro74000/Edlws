@@ -1164,6 +1164,8 @@ void TexturePass(Environment& env, IR::Program& program, const HostTranslateInfo
     env.track_cache.clear();
     TextureInstVector to_replace;
     g_handle_programs = &program.info.handle_programs;
+    program.info.handle_storage_alignment =
+        static_cast<u32>((std::max)(host_info.min_ssbo_alignment, u64{1}));
     for (IR::Block* const block : program.post_order_blocks) {
         env.track_cache.clear();
         for (IR::Inst& inst : block->Instructions()) {
