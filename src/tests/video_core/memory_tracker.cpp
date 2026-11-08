@@ -1,7 +1,10 @@
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include <algorithm>
+#include <array>
 #include <memory>
+#include <random>
 #include <stdexcept>
 #include "common/container/unordered_map.h"
 #include <tuple>
@@ -608,4 +611,70 @@ TEST_CASE("DeviceMemoryManager: UpdatePagesCachedBatch basic") {
     ranges.emplace_back(Core::Memory::YUZU_PAGESIZE, Core::Memory::YUZU_PAGESIZE);
     manager.UpdatePagesCachedBatch(ranges, 1);
     SUCCEED("UpdatePagesCachedBatch executed without error");
+}
+
+TEST_CASE("MemoryTracker: A synchronized range has nothing to upload", "[video_core]") {
+    // What BufferCache::SynchronizeGeometryBuffer relies on to skip a scan: while a slot is
+    // synchronized, no CPU write has reached its range since the scan that watched it.
+    RasterizerInterface rasterizer;
+    std::optional<MemoryTracker> memory_track(rasterizer);
+    constexpr u64 span = WORD * 4;
+    memory_track->UnmarkRegionAsCpuModified(c, span);
+    std::mt19937_64 rng{0x5eed};
+    const auto random_range = [&] {
+        const u64 offset = rng() % span;
+        const u64 size = 1 + rng() % (std::min<u64>(span - offset, PAGE * 9));
+        return std::pair{c + offset, size};
+    };
+    constexpr u32 slots = 8;
+    std::array<std::pair<u64, u64>, slots> watched{};
+    for (int step = 0; step < 20000; ++step) {
+        const auto [addr, size] = random_range();
+        switch (rng() % 6) {
+        case 0:
+            memory_track->MarkRegionAsCpuModified(addr, size);
+            break;
+        case 1:
+            memory_track->CachedCpuWrite(addr, size);
+            break;
+        case 2:
+            memory_track->FlushCachedWrites();
+            break;
+        case 3:
+            memory_track->MarkRegionAsGpuModified(addr, size);
+            break;
+        default: {
+            // A geometry bind: skip while synchronized, else scan and watch.
+            const u32 slot = static_cast<u32>(rng() % slots);
+            if (memory_track->IsSynchronized(slot) && watched[slot] == std::pair{addr, size}) {
+                break;
+            }
+            memory_track->ForEachUploadRange(addr, size, [](u64, u64) {});
+            memory_track->WatchSynchronized(slot, addr, size);
+            watched[slot] = {addr, size};
+            break;
+        }
+        }
+        for (u32 slot = 0; slot < slots; ++slot) {
+            if (memory_track->IsSynchronized(slot)) {
+                const auto [watched_addr, watched_size] = watched[slot];
+                REQUIRE(!memory_track->IsRegionCpuModified(watched_addr, watched_size));
+            }
+        }
+    }
+    // Rebinding the same random range is rare: check the bound itself was exercised.
+    for (u32 slot = 0; slot < slots; ++slot) {
+        memory_track->ForEachUploadRange(watched[slot].first, watched[slot].second,
+                                         [](u64, u64) {});
+        memory_track->WatchSynchronized(slot, watched[slot].first, watched[slot].second);
+    }
+    for (u32 slot = 0; slot < slots; ++slot) {
+        CHECK(memory_track->IsSynchronized(slot));
+    }
+    memory_track->CachedCpuWrite(watched[0].first, 1);
+    CHECK(!memory_track->IsSynchronized(0));
+    memory_track->FlushCachedWrites();
+    for (u32 slot = 0; slot < slots; ++slot) {
+        CHECK(!memory_track->IsSynchronized(slot));
+    }
 }

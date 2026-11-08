@@ -508,6 +508,10 @@ private:
 
     bool SynchronizeBuffer(Buffer& buffer, DAddr device_addr, u32 size);
 
+    /// SynchronizeBuffer for the vertex buffer slots and the index buffer (slot
+    /// NUM_VERTEX_BUFFERS), skipped while nothing wrote the range since its last scan.
+    void SynchronizeGeometryBuffer(u32 slot, BufferId buffer_id, DAddr device_addr, u32 size);
+
     void UploadMemory(Buffer& buffer, u64 total_size_bytes, u64 largest_copy,
                       std::span<BufferCopy> copies);
 
@@ -579,6 +583,22 @@ private:
     u32 stale_vertex_buffers_mask = 0;
     u64 vertex_buffers_serial = 0;
     std::array<Binding, 32> v_buffer{};
+
+    /// The range each geometry slot last scanned for uploads (SynchronizeGeometryBuffer).
+    struct GeometrySync {
+        BufferId buffer_id{};
+        DAddr device_addr{};
+        u32 size{};
+        u64 deletions{};
+    };
+    std::array<GeometrySync, NUM_VERTEX_BUFFERS + 1> geometry_syncs{};
+    /// Counts buffer deletions: a buffer id older than this count may have been freed or reused.
+    u64 buffer_deletions = 0;
+    struct GeometryStats {
+        u64 syncs{};
+        u64 syncs_skipped{};
+        u64 verify_mismatches{};
+    } geometry_stats;
 
     boost::container::small_vector<BufferCopy, 4> upload_copies;
 
