@@ -17,6 +17,7 @@
 // TODO: find out which don't require stable iters
 #include <unordered_map>
 #include "common/container/unordered_map.h"
+#include "video_core/page_filter.h"
 #include "common/container/unordered_set.h"
 #include <vector>
 #include <boost/container/small_vector.hpp>
@@ -256,6 +257,9 @@ class TextureCache : public VideoCommon::ChannelSetupCaches<TextureCacheChannelI
     };
 
 public:
+    /// Device pages this cache ever registered objects on (InnerInvalidation skips the rest).
+    VideoCommon::PageFilter page_filter;
+
     explicit TextureCache(Runtime&, Tegra::MaxwellDeviceMemoryManager&);
 
     /// Notify the cache that a new frame has been queued

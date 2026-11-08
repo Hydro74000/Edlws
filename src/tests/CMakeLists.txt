@@ -57,6 +57,7 @@ add_executable(tests
     video_core/block_linear_gob_copy.cpp
     video_core/cpu_write_runs.cpp
     video_core/buffer_cache_downloads.cpp
+    video_core/page_filter.cpp
     video_core/query_page_filter.cpp
     video_core/texture_alias_ticks.cpp
     input_common/calibration_configuration_job.cpp
