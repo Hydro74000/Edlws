@@ -203,7 +203,7 @@ public:
         return view_formats[static_cast<std::size_t>(format)];
     }
 
-    void BarrierFeedbackLoop();
+    void BarrierFeedbackLoop(u32 attachments);
 
     bool IsFormatDitherable(VideoCore::Surface::PixelFormat format);
     bool IsFormatScalable(VideoCore::Surface::PixelFormat format);

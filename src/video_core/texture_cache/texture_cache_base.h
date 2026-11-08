@@ -250,6 +250,9 @@ public:
 
     [[nodiscard]] bool SamplesRenderTarget(std::span<const ImageViewInOut> views);
 
+    /// Attachments the draw being prepared writes: bit i for colour target i, NUM_RT for depth.
+    [[nodiscard]] u32 RenderTargetWriteMask() const;
+
     /// Get the sampler from the graphics/compute descriptor table in the specified index
     Sampler* GetSampler(u32 index, bool compute);
 

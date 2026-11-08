@@ -278,11 +278,11 @@ void Scheduler::FlushDeferredClear() {
     EndRenderPass();
 }
 
-void Scheduler::RequestRenderpass(const Framebuffer* framebuffer) {
+void Scheduler::RequestRenderpass(const Framebuffer* framebuffer, u32 write_mask) {
     // Every write into a render pass asks for it first.
     if (deferred_clear.framebuffer == framebuffer) {
         RealizeDeferredClear();
-        render_pass_has_writes = true;
+        render_pass_write_mask = ~0u; // the clear wrote its attachments
         return;
     }
     const VkRenderPass renderpass = framebuffer->RenderPass();
@@ -291,13 +291,13 @@ void Scheduler::RequestRenderpass(const Framebuffer* framebuffer) {
     if (renderpass == state.renderpass && framebuffer_handle == state.framebuffer &&
         render_area.width == state.render_area.width &&
         render_area.height == state.render_area.height) {
-        render_pass_has_writes = true;
+        render_pass_write_mask |= write_mask;
         return;
     }
     // Ends any active pass and realizes a deferred clear
     EndRenderPass();
     BeginRenderPassImpl(framebuffer, renderpass, nullptr, 0);
-    render_pass_has_writes = true;
+    render_pass_write_mask = write_mask;
 }
 
 void Scheduler::RequestOutsideRenderPassOperationContext() {
@@ -496,7 +496,7 @@ void Scheduler::EndRenderPass()
 
         fragment_barrier_pending = false;
         render_pass_has_stores = false;
-        render_pass_has_writes = false;
+        render_pass_write_mask = 0;
         render_pass_discards = false;
 
         query_cache->CounterClose(VideoCommon::QueryType::StreamingByteCount);

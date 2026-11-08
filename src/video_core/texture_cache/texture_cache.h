@@ -599,22 +599,22 @@ void TextureCache<P>::CheckFeedbackLoop(std::span<const ImageViewInOut> views) {
     if (!Settings::values.barrier_feedback_loops.GetValue()) {
         return;
     }
-    constexpr u8 FeedbackColor = 1;
-    constexpr u8 FeedbackDepth = 2;
     const auto& regs = maxwell3d->regs;
     const bool writes_depth_stencil = regs.depth_write_enabled != 0 || regs.stencil_enable != 0;
-    const auto barrier = [&](u8 feedback) {
+    const u32 depth_bit = 1u << NUM_RT;
+    // attachments: bit i for colour target i, NUM_RT for depth, as in RenderTargetWriteMask.
+    const auto barrier = [&](u32 attachments) {
 #ifdef __APPLE__
         // Ending a render pass is costly on tile-based GPUs: for depth, only when it changed.
-        if (feedback == FeedbackDepth) {
+        if (attachments == depth_bit) {
             if (!feedback_depth_dirty) {
                 return;
             }
             feedback_depth_dirty = false;
         }
 #endif
-        if (feedback != 0) {
-            runtime.BarrierFeedbackLoop();
+        if (attachments != 0) {
+            runtime.BarrierFeedbackLoop(attachments);
         }
     };
     SCOPE_EXIT {
@@ -632,7 +632,6 @@ void TextureCache<P>::CheckFeedbackLoop(std::span<const ImageViewInOut> views) {
     if (rt_active_mask == 0) {
         return;
     }
-    const u32 depth_bit = 1u << NUM_RT;
     const bool depth_active = (rt_active_mask & depth_bit) != 0;
     const auto overlaps = [](const SubresourceRange& lhs, const SubresourceRange& rhs) {
         return lhs.base.level < rhs.base.level + rhs.extent.levels &&
@@ -641,7 +640,7 @@ void TextureCache<P>::CheckFeedbackLoop(std::span<const ImageViewInOut> views) {
                rhs.base.layer < lhs.base.layer + lhs.extent.layers;
     };
 
-    u8 feedback = 0;
+    u32 attachments = 0;
     for (const auto& view : views) {
         if (!view.id) {
             continue;
@@ -653,17 +652,37 @@ void TextureCache<P>::CheckFeedbackLoop(std::span<const ImageViewInOut> views) {
         for (size_t i = 0; i < NUM_RT; ++i) {
             if ((rt_active_mask & (1u << i)) != 0 && sampled.image_id == rt_image_id[i] &&
                 overlaps(sampled.range, slot_image_views[render_targets.color_buffer_ids[i]].range)) {
-                feedback |= FeedbackColor;
+                attachments |= 1u << i;
             }
         }
         // Depth: another view of the depth target (the view itself is left out, #3338).
         if (depth_active && view.id != render_targets.depth_buffer_id &&
             sampled.image_id == rt_depth_image_id) {
-            feedback |= FeedbackDepth;
+            attachments |= depth_bit;
         }
     }
 
-    barrier(feedback);
+    barrier(attachments);
+}
+
+template <class P>
+u32 TextureCache<P>::RenderTargetWriteMask() const {
+    const auto& regs = maxwell3d->regs;
+    if (regs.rasterize_enable == 0) {
+        return 0;
+    }
+    u32 mask = 0;
+    for (size_t i = 0; i < NUM_RT; ++i) {
+        if ((rt_active_mask & (1u << i)) != 0 &&
+            regs.color_mask[regs.color_mask_common ? 0 : i].raw != 0) {
+            mask |= 1u << i;
+        }
+    }
+    if ((rt_active_mask & (1u << NUM_RT)) != 0 &&
+        (regs.depth_write_enabled != 0 || regs.stencil_enable != 0)) {
+        mask |= 1u << NUM_RT;
+    }
+    return mask;
 }
 
 template <class P>

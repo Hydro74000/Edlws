@@ -78,7 +78,8 @@ public:
     void DispatchWork();
 
     /// Requests to begin a renderpass.
-    void RequestRenderpass(const Framebuffer* framebuffer);
+    /// write_mask: the attachments the caller writes (RenderPassWriteMask), all when unknown.
+    void RequestRenderpass(const Framebuffer* framebuffer, u32 write_mask = ~0u);
 
     /// Defers a full-attachment color clear so it becomes the next render pass.
     bool DeferColorClear(const Framebuffer* framebuffer, u32 rt_slot, const VkClearValue& value);
@@ -112,9 +113,9 @@ public:
         return render_pass_has_stores;
     }
 
-    /// Whether a draw, clear or blit was recorded in the active render pass.
-    bool RenderPassHasWrites() const {
-        return render_pass_has_writes;
+    /// Attachments written in the active render pass: bit i for colour target i, bit 8 for depth.
+    u32 RenderPassWriteMask() const {
+        return render_pass_write_mask;
     }
 
     /// Whether the active render pass drops an attachment at its end (cleared MSAA).
@@ -255,7 +256,7 @@ private:
     bool flush_pending{};
     bool fragment_barrier_pending{};
     bool render_pass_has_stores{};
-    bool render_pass_has_writes{};
+    u32 render_pass_write_mask{};
     bool render_pass_discards{};
 
     class Command {

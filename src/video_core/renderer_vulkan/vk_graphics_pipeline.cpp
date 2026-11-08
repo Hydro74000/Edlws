@@ -713,7 +713,8 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
         }
     }
 
-    scheduler.RequestRenderpass(texture_cache.GetFramebuffer());
+    scheduler.RequestRenderpass(texture_cache.GetFramebuffer(),
+                                texture_cache.RenderTargetWriteMask());
     if (writes_storage) {
         scheduler.NoteRenderPassStores();
     }

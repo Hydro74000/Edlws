@@ -147,7 +147,7 @@ public:
         return state_tracker;
     }
 
-    void BarrierFeedbackLoop() const noexcept {
+    void BarrierFeedbackLoop(u32) const noexcept {
         // Texel fetches see what earlier draws wrote to a bound attachment only after a texture
         // barrier (ARB_texture_barrier, core since OpenGL 4.5).
         glTextureBarrier();
