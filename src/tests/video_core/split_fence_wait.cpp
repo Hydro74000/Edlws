@@ -27,8 +27,24 @@ struct Cache {
     bool HasAsyncFlushWork() const { return true; }
     bool ShouldWaitAsyncFlushes() const { return true; }
     void AccumulateFlushes() {}
-    void CommitAsyncFlushes() {}
+    bool CommitAsyncFlushes() { return true; }
     void PopAsyncFlushes() {}
+};
+
+struct IdleCache {
+    std::mutex mutex;
+    bool HasUncommittedFlushes() const { return false; }
+    bool HasAsyncFlushWork() const { return false; }
+    bool ShouldWaitAsyncFlushes() const { return false; }
+    void AccumulateFlushes() {}
+    bool CommitAsyncFlushes() { return false; }
+    void PopAsyncFlushes() {}
+};
+
+/// Has nothing to download until it commits, which then finds queries: NotifyWFI adds the copy
+/// of a running samples query there.
+struct LateQueryCache : IdleCache {
+    bool CommitAsyncFlushes() { return true; }
 };
 
 struct Fence : VideoCommon::FenceBase {
@@ -42,6 +58,32 @@ struct Traits {
     using BufferCacheType = Cache;
     using QueryCacheType = Cache;
     static constexpr bool HAS_ASYNC_CHECK = true;
+};
+
+struct LateTraits {
+    using FenceType = std::shared_ptr<Fence>;
+    using TextureCacheType = IdleCache;
+    using BufferCacheType = IdleCache;
+    using QueryCacheType = LateQueryCache;
+    static constexpr bool HAS_ASYNC_CHECK = true;
+};
+
+class LateManager final : public VideoCommon::FenceManager<LateTraits> {
+public:
+    LateManager(VideoCore::RasterizerInterface& rasterizer_, Tegra::GPU& gpu_, IdleCache& texture,
+                IdleCache& buffer, LateQueryCache& query)
+        : VideoCommon::FenceManager<LateTraits>{rasterizer_, gpu_, texture, buffer, query} {}
+
+    std::vector<bool> stubbed;
+
+protected:
+    std::shared_ptr<Fence> CreateFence(bool is_stubbed) override {
+        stubbed.push_back(is_stubbed);
+        return std::make_shared<Fence>(is_stubbed, stubbed.size());
+    }
+    void QueueFence(std::shared_ptr<Fence>&) override {}
+    bool IsFenceSignaled(std::shared_ptr<Fence>&) const override { return true; }
+    void WaitFence(std::shared_ptr<Fence>&) override {}
 };
 
 struct Submission {
@@ -160,4 +202,23 @@ TEST_CASE("Immediate fence waits still submit outstanding work", "[video_core][s
         REQUIRE_FALSE(submission.wrong_owner);
     }
     REQUIRE(callback.load());
+}
+
+TEST_CASE("A fence whose query commit finds downloads is not stubbed", "[video_core][split_fence_wait]") {
+    ScopedSystemTestContext context;
+    Core::System system;
+    Tegra::GPU gpu{system, false, false};
+    Null::RasterizerNull rasterizer{gpu};
+    IdleCache texture, buffer;
+    LateQueryCache query;
+    const auto previous = Settings::values.gpu_fence_behavior.GetValue();
+    SCOPE_EXIT { Settings::values.gpu_fence_behavior.SetValue(previous); };
+    // Delayed fences, as at High GPU accuracy: a fence with nothing to download is still made.
+    Settings::values.gpu_fence_behavior.SetValue(Settings::GpuFenceBehavior::Accurate);
+    LateManager manager{rasterizer, gpu, texture, buffer, query};
+    manager.SignalFence([] {});
+    REQUIRE(manager.stubbed.size() == 1);
+    // Stubbed, the fencing thread released it without waiting for the host GPU and waited for
+    // query slots that were not even submitted.
+    CHECK_FALSE(manager.stubbed[0]);
 }

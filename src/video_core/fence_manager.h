@@ -99,8 +99,10 @@ public:
             return;
         }
         skipped_fences = 0;
-        should_flush |= query_cache.HasUncommittedFlushes();
-        query_cache.CommitAsyncFlushes();
+        // Asked after the commit: NotifyWFI can add queries to download (the copy of a running
+        // samples query). A fence made stubbed with them was released without waiting for the
+        // host GPU, and the fencing thread waited for slots not even submitted.
+        should_flush |= query_cache.CommitAsyncFlushes();
         TFence new_fence = CreateFence(!should_flush);
         if constexpr (can_async_check) {
             guard.lock();
