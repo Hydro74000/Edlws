@@ -148,7 +148,9 @@ public:
     }
 
     void BarrierFeedbackLoop() const noexcept {
-        // OpenGL does not require a barrier for attachment feedback loops.
+        // Texel fetches see what earlier draws wrote to a bound attachment only after a texture
+        // barrier (ARB_texture_barrier, core since OpenGL 4.5).
+        glTextureBarrier();
     }
 
 private:
