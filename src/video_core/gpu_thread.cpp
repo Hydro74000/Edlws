@@ -56,7 +56,7 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
 
         auto current_context = context.Acquire();
         CommandDataContainer next;
-        // When a pending channel last moved or a command arrived (see the polling below).
+        // When a pending channel last moved or a command was handled (see the polling below).
         auto last_progress = std::chrono::steady_clock::now();
         namespace Profile = VideoCommon::Nx2Profile;
         auto& split = VideoCommon::GpuSplit::Get();
@@ -66,11 +66,18 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
             if (scheduler.HasPendingChannels()) {
                 state.front_idle.store(false, std::memory_order_release);
                 // Suspended channels wait on semaphores the CPU releases: poll them meanwhile.
+                bool resumed = false;
                 {
                     Profile::Scope scope{Profile::Zone::ResumePending};
-                    scheduler.ResumePending(system.GPU());
+                    resumed = scheduler.ResumePending(system.GPU());
+                }
+                if (resumed) {
+                    last_progress = std::chrono::steady_clock::now();
                 }
                 if (!state.queue.TryPop(next)) {
+                    if (!scheduler.HasPendingChannels()) {
+                        continue; // the last waiting channel just ran
+                    }
                     state.front_idle.store(true, std::memory_order_release);
                     // The CPU usually releases the semaphore soon after: poll for half a
                     // millisecond before sleeping, or every wait also waits out a host sleep
@@ -93,7 +100,6 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
             if (stop_token.stop_requested()) {
                 break;
             }
-            last_progress = std::chrono::steady_clock::now();
             if (split.Active()) {
                 // Only command lists are parsed here; everything else runs on the back thread
                 // in order, and so does the signal that the command ran.
@@ -126,6 +132,8 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
                     SignalCommand(*state_ptr, fence, block);
                 });
                 split.Publish();
+                // From the end of the command: a list that ends in a wait gets the whole poll.
+                last_progress = std::chrono::steady_clock::now();
                 continue;
             }
             if (auto* submit_list = std::get_if<SubmitListCommand>(&next.data)) {
@@ -147,6 +155,7 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
                 ASSERT(false);
             }
             SignalCommand(state, next.fence, next.block);
+            last_progress = std::chrono::steady_clock::now();
         }
     });
 }
