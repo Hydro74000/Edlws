@@ -6,6 +6,7 @@
 
 add_executable(tests
     audio_core/adpcm_decode.cpp
+    video_core/shader_object_pool.cpp
     common/bit_field.cpp
     common/bit_util.cpp
     common/cityhash.cpp
