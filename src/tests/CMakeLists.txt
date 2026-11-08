@@ -55,6 +55,8 @@ add_executable(tests
     video_core/shader_attributes.cpp
     video_core/indirect_reset.cpp
     video_core/block_linear_gob_copy.cpp
+    video_core/cpu_write_runs.cpp
+    video_core/buffer_cache_downloads.cpp
     input_common/calibration_configuration_job.cpp
     network/packet.cpp
     qt_common/game_discovery.cpp

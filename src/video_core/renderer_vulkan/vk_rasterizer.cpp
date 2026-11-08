@@ -239,6 +239,9 @@ RasterizerVulkan::RasterizerVulkan(Core::Frontend::EmuWindow& emu_window_, Tegra
       fence_manager(*this, gpu, texture_cache, buffer_cache, query_cache, device, scheduler),
       wfi_event(device.GetLogical().CreateEvent()) {
     scheduler.SetQueryCache(query_cache);
+    buffer_cache.SetPendingCpuWrites([this](const std::function<void(DAddr, size_t)>& callback) {
+        gpu.ForEachPendingCpuWrite(callback);
+    });
     VideoCommon::GpuSplit::Get().SetIdleHook(
         [](void* argument) { static_cast<Scheduler*>(argument)->FlushDeferred(); },
         &scheduler);
@@ -1286,6 +1289,23 @@ void RasterizerVulkan::OnCacheInvalidation(DAddr addr, u64 size) {
         buffer_cache.WriteMemory(addr, size);
     }
     pipeline_cache.InvalidateRegion(addr, size);
+}
+
+void RasterizerVulkan::ApplyCpuWrites(const GatherCpuWrites& gather) {
+    // All of them out of the GPU-written ranges first, under the lock every download holds:
+    // applying one downloads the GPU's bytes elsewhere on its pages (WriteMemory), and a fence's
+    // download would land over writes handed out and not applied yet.
+    std::vector<std::pair<DAddr, u64>> writes;
+    {
+        std::scoped_lock lock{buffer_cache.mutex};
+        std::function<void(PAddr, size_t)> collect(
+            [&writes](PAddr address, size_t size) { writes.emplace_back(address, size); });
+        gather(collect);
+        buffer_cache.ClaimCpuWrites(writes);
+    }
+    for (const auto& [address, size] : writes) {
+        OnCacheInvalidation(address, size);
+    }
 }
 
 bool RasterizerVulkan::TryCacheInvalidation(DAddr addr, u64 size) {

@@ -133,6 +133,14 @@ public:
     /// Notify rasterizer that any caches of the specified region are desync with guest
     virtual void OnCacheInvalidation(PAddr addr, u64 size) = 0;
 
+    /// Applies the collected guest CPU writes `gather` hands to its callback (InvalidateGPUCache).
+    using GatherCpuWrites = std::function<void(std::function<void(PAddr, size_t)>&)>;
+    virtual void ApplyCpuWrites(const GatherCpuWrites& gather) {
+        std::function<void(PAddr, size_t)> apply(
+            [this](PAddr address, size_t size) { OnCacheInvalidation(address, size); });
+        gather(apply);
+    }
+
     virtual bool TryCacheInvalidation(DAddr addr, u64 size) {
         if (MustFlushRegion(addr, size, VideoCommon::CacheType::BufferCache)) return false;
         OnCacheInvalidation(addr, size);

@@ -80,7 +80,11 @@ RasterizerOpenGL::RasterizerOpenGL(Core::Frontend::EmuWindow& emu_window_, Tegra
                    program_manager, state_tracker, gpu.ShaderNotify()),
       query_cache(*this, device_memory_), accelerate_dma(buffer_cache, texture_cache),
       fence_manager(*this, gpu, texture_cache, buffer_cache, query_cache),
-      blit_image(program_manager_) {}
+      blit_image(program_manager_) {
+    buffer_cache.SetPendingCpuWrites([this](const std::function<void(DAddr, size_t)>& callback) {
+        gpu.ForEachPendingCpuWrite(callback);
+    });
+}
 
 RasterizerOpenGL::~RasterizerOpenGL() = default;
 
@@ -582,6 +586,23 @@ void RasterizerOpenGL::OnCacheInvalidation(DAddr addr, u64 size) {
         buffer_cache.WriteMemory(addr, size);
     }
     shader_cache.InvalidateRegion(addr, size);
+}
+
+void RasterizerOpenGL::ApplyCpuWrites(const GatherCpuWrites& gather) {
+    // All of them out of the GPU-written ranges first, under the lock every download holds:
+    // applying one downloads the GPU's bytes elsewhere on its pages (WriteMemory), and a fence's
+    // download would land over writes handed out and not applied yet.
+    std::vector<std::pair<DAddr, u64>> writes;
+    {
+        std::scoped_lock lock{buffer_cache.mutex};
+        std::function<void(PAddr, size_t)> collect(
+            [&writes](PAddr address, size_t size) { writes.emplace_back(address, size); });
+        gather(collect);
+        buffer_cache.ClaimCpuWrites(writes);
+    }
+    for (const auto& [address, size] : writes) {
+        OnCacheInvalidation(address, size);
+    }
 }
 
 void RasterizerOpenGL::InvalidateGPUCache() {

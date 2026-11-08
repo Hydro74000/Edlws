@@ -33,6 +33,7 @@
 #include "common/settings.h"
 #include "common/slot_vector.h"
 #include "video_core/buffer_cache/buffer_base.h"
+#include "video_core/buffer_cache/cpu_write_runs.h"
 #include "video_core/buffer_cache/virtual_range_cache.h"
 #include "video_core/control/channel_state_cache.h"
 #include "video_core/delayed_destruction_ring.h"
@@ -176,6 +177,8 @@ public:
 
 template <class P>
 class BufferCache : public VideoCommon::ChannelSetupCaches<BufferCacheChannelInfo> {
+    friend struct BufferCacheTestAccess;
+
     // Page size for caching purposes.
     // This is unrelated to the CPU page size and it can be changed as it seems optimal.
 #ifdef YUZU_LEGACY
@@ -305,6 +308,18 @@ public:
                                                           ObtainBufferSynchronize sync_info,
                                                           ObtainBufferOperation post_op);
     void FlushCachedWrites();
+
+    /// Where the guest CPU writes into GPU-written memory that were collected and not applied yet
+    /// come from: downloads must not write the GPU's older copy over them.
+    using PendingCpuWrites = std::function<void(const std::function<void(DAddr, size_t)>&)>;
+    void SetPendingCpuWrites(PendingCpuWrites source) {
+        pending_cpu_writes = std::move(source);
+    }
+
+    /// Takes collected CPU writes out of the GPU-written ranges before any of them is applied:
+    /// applying one downloads the GPU's bytes elsewhere on its pages (WriteMemory), which would
+    /// otherwise land over the next one.
+    void ClaimCpuWrites(std::span<const std::pair<DAddr, u64>> writes);
 
     /// Return true when there are uncommitted buffers to be downloaded
     [[nodiscard]] bool HasUncommittedFlushes() const noexcept;
@@ -537,6 +552,12 @@ private:
 
     void ClearDownload(DAddr base_addr, u64 size);
 
+    [[nodiscard]] CpuWriteRuns CollectPendingCpuWrites() const;
+
+    /// Writes downloaded bytes to guest memory, except over collected CPU writes.
+    void WriteDownloadedMemory(const CpuWriteRuns& cpu_writes, DAddr device_addr, const u8* data,
+                               u64 size);
+
     void InlineMemoryImplementation(DAddr dest_address, size_t copy_size,
                                     std::span<const u8> inlined_buffer);
 
@@ -616,6 +637,7 @@ private:
     /// fence pops. A write to a range after a download was taken removes it from that download
     /// (and every other pending one): its bytes are older than the write.
     std::deque<Common::RangeSet<DAddr>> pending_download_ranges;
+    PendingCpuWrites pending_cpu_writes;
     std::optional<Async_Buffer> current_buffer;
 
     std::deque<Async_Buffer> async_buffers_death_ring;

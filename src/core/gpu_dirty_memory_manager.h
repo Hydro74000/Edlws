@@ -60,21 +60,30 @@ public:
             }
         }
         for (auto& transform : front_buffer) {
-            size_t offset = 0;
-            u64 mask = transform.mask;
-            while (mask != 0) {
-                const size_t empty_bits = std::countr_zero(mask);
-                offset += empty_bits << align_bits;
-                mask = mask >> empty_bits;
-
-                const size_t continuous_bits = std::countr_one(mask);
-                callback((static_cast<PAddr>(transform.address) << page_bits) + offset,
-                         continuous_bits << align_bits);
-                mask = continuous_bits < align_size ? (mask >> continuous_bits) : 0;
-                offset += continuous_bits << align_bits;
-            }
+            ForEachRun(transform, callback);
         }
         front_buffer.clear();
+    }
+
+    /// Whether writes are collected that no Gather has handed out yet.
+    bool HasPending() {
+        // The mask, not IsValid: the empty default entry passes IsValid too.
+        if (current.load(std::memory_order_acquire).mask != 0) {
+            return true;
+        }
+        std::scoped_lock lk(guard);
+        return !back_buffer.empty();
+    }
+
+    /// Calls `callback` for each run of the writes collected that no Gather has handed out yet,
+    /// without consuming them. It runs under the collection lock: it must take no other lock.
+    template <typename Func>
+    void ForEachPending(Func&& callback) {
+        std::scoped_lock lk(guard);
+        for (const auto& transform : back_buffer) {
+            ForEachRun(transform, callback);
+        }
+        ForEachRun(current.load(std::memory_order_acquire), callback);
     }
 
 private:
@@ -82,6 +91,23 @@ private:
         u32 address;
         u32 mask;
     };
+
+    template <typename Func>
+    static void ForEachRun(const TransformAddress& transform, Func&& callback) {
+        size_t offset = 0;
+        u64 mask = transform.mask;
+        while (mask != 0) {
+            const size_t empty_bits = std::countr_zero(mask);
+            offset += empty_bits << align_bits;
+            mask = mask >> empty_bits;
+
+            const size_t continuous_bits = std::countr_one(mask);
+            callback((static_cast<PAddr>(transform.address) << page_bits) + offset,
+                     continuous_bits << align_bits);
+            mask = continuous_bits < align_size ? (mask >> continuous_bits) : 0;
+            offset += continuous_bits << align_bits;
+        }
+    }
 
     constexpr static size_t page_bits = DEVICE_PAGEBITS - 1;
     constexpr static size_t page_size = 1ULL << page_bits;
