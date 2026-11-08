@@ -171,3 +171,19 @@ TEST_CASE("Usage tracker never misses an overlapping byte range",
         }
     }
 }
+
+TEST_CASE("Usage tracker resets every page tracked since the last reset",
+          "[video_core][usage_tracker]") {
+    constexpr u64 Size = 64 * 4096;
+    VideoCommon::UsageTracker tracker{Size};
+    tracker.Track(60 * 4096 + 128, 64);
+    tracker.Track(2 * 4096, 3 * 4096 + 1);
+    tracker.Reset();
+    REQUIRE_FALSE(tracker.IsUsed(0, Size));
+    tracker.Track(30 * 4096, 64);
+    tracker.Reset();
+    REQUIRE_FALSE(tracker.IsUsed(0, Size));
+    tracker.Track(63 * 4096 + 4032, 64);
+    REQUIRE(tracker.IsUsed(63 * 4096 + 4032, 64));
+    REQUIRE_FALSE(tracker.IsUsed(0, 63 * 4096 + 4032));
+}

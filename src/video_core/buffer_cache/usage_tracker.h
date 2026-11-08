@@ -6,7 +6,9 @@
 
 #pragma once
 
+#include <algorithm>
 #include <array>
+#include <limits>
 #include <utility>
 #include <vector>
 
@@ -27,7 +29,13 @@ public:
     }
 
     void Reset() noexcept {
-        std::ranges::fill(pages, 0ULL);
+        // Only the pages tracked since the last reset: the runtime resets every idle buffer each
+        // frame, most of them untouched or barely touched.
+        if (dirty_begin < dirty_end) {
+            std::fill(pages.begin() + dirty_begin, pages.begin() + dirty_end, 0ULL);
+        }
+        dirty_begin = std::numeric_limits<size_t>::max();
+        dirty_end = 0;
         recent.fill({~u64{0}, 0});
     }
 
@@ -46,6 +54,8 @@ public:
         if (page_end < page || page_end >= pages.size()) {
             return;
         }
+        dirty_begin = std::min(dirty_begin, page);
+        dirty_end = std::max(dirty_end, page_end + 1);
         TrackPage(page, offset, size);
         if (page == page_end) {
             return;
@@ -105,6 +115,9 @@ private:
     /// Ranges tracked last, (offset, size).
     std::array<std::pair<u64, u64>, 4> recent{{{~u64{0}, 0}, {~u64{0}, 0}, {~u64{0}, 0}, {~u64{0}, 0}}};
     size_t recent_cursor{};
+    /// Pages [dirty_begin, dirty_end) hold every bit set since the last reset.
+    size_t dirty_begin{std::numeric_limits<size_t>::max()};
+    size_t dirty_end{};
 };
 
 } // namespace VideoCommon
