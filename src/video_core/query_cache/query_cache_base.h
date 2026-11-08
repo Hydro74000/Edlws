@@ -19,6 +19,7 @@
 #include "video_core/control/channel_state_cache.h"
 #include "video_core/host1x/gpu_device_memory_manager.h"
 #include "video_core/query_cache/query_base.h"
+#include "video_core/query_cache/query_page_filter.h"
 #include "video_core/query_cache/types.h"
 
 namespace VideoCore {
@@ -64,9 +65,9 @@ public:
 
     void FlushRegion(VAddr addr, std::size_t size) {
         bool result = false;
+        // Every dirty query in the range is written, so this walk never stops early.
         IterateCache<false>(addr, size, [this, &result](QueryLocation location) {
             result |= SemiFlushQueryDirty(location);
-            return result;
         });
         if (result) {
             RequestGuestHostSync();
@@ -126,11 +127,15 @@ protected:
     template <bool remove_from_cache, typename Func>
     void IterateCache(VAddr addr, std::size_t size, Func&& func) {
         static constexpr bool RETURNS_BOOL =
-            std::is_same_v<std::invoke_result<Func, QueryLocation>, bool>;
+            std::is_same_v<std::invoke_result_t<Func, QueryLocation>, bool>;
         const u64 addr_begin = addr;
         const u64 addr_end = addr_begin + size;
 
         const u64 page_end = addr_end >> Core::DEVICE_PAGEBITS;
+        // Inline writes and CPU write traps invalidate pages that almost never hold a query.
+        if (!query_pages.MayHold(addr_begin >> Core::DEVICE_PAGEBITS, page_end)) {
+            return;
+        }
         std::scoped_lock lock(cache_mutex);
         for (u64 page = addr_begin >> Core::DEVICE_PAGEBITS; page <= page_end; ++page) {
             const u64 page_start = page << Core::DEVICE_PAGEBITS;
@@ -180,6 +185,7 @@ protected:
     void UnregisterPending();
 
     ::Common::unordered_map<u64, ::Common::unordered_map<u32, QueryLocation>> cached_queries;
+    QueryPageFilter query_pages; ///< Pages of cached_queries, readable without cache_mutex
     std::mutex cache_mutex;
 
     struct QueryCacheBaseImpl;
