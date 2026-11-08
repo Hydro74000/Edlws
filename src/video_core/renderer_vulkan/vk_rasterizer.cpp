@@ -1086,6 +1086,7 @@ void RasterizerVulkan::DispatchCompute() {
             }
             cmdbuf.DispatchIndirect(indirect_buffer, indirect_offset);
         });
+        scheduler.NoteComputeWrites();
         SubmitNx2ListCopies();
         return;
     }
@@ -1109,6 +1110,7 @@ void RasterizerVulkan::DispatchCompute() {
         }
         cmdbuf.Dispatch(dim[0], dim[1], dim[2]);
     });
+    scheduler.NoteComputeWrites();
     SubmitNx2ListCopies();
 
     // Log compute dispatch

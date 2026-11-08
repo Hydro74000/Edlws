@@ -123,6 +123,11 @@ public:
         return render_pass_discards;
     }
 
+    /// A dispatch was recorded: the next render pass must see what it wrote.
+    void NoteComputeWrites() noexcept {
+        compute_writes_pending = true;
+    }
+
     bool IsRenderPassActive() const {
         return state.renderpass != VK_NULL_HANDLE;
     }
@@ -256,6 +261,7 @@ private:
     bool flush_pending{};
     bool fragment_barrier_pending{};
     bool render_pass_has_stores{};
+    bool compute_writes_pending{};
     u32 render_pass_write_mask{};
     bool render_pass_discards{};
 
