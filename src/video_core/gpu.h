@@ -148,6 +148,9 @@ public:
     void FlushCommands();
     /// Synchronizes CPU writes with Host GPU memory.
     void InvalidateGPUCache();
+    /// Calls `callback` for each guest CPU write into GPU-written memory collected and not handed
+    /// out to the rasterizer yet. The callback must take no lock.
+    void ForEachPendingCpuWrite(const std::function<void(DAddr, size_t)>& callback);
     /// Signal the ending of command list.
     void OnCommandListEnd();
 
