@@ -15,6 +15,7 @@
 
 #include "common/common_types.h"
 #include "video_core/buffer_cache/memory_tracker_base.h"
+#include "video_core/buffer_cache/read_trap_tracker.h"
 #include "core/device_memory.h"
 #include "core/memory.h"
 #include "video_core/host1x/gpu_device_memory_manager.h"
@@ -677,4 +678,48 @@ TEST_CASE("MemoryTracker: A synchronized range has nothing to upload", "[video_c
     for (u32 slot = 0; slot < slots; ++slot) {
         CHECK(!memory_track->IsSynchronized(slot));
     }
+}
+
+TEST_CASE("Consumed read traps rearm on the next GPU write", "[cpu_readback][read_traps]") {
+    VideoCommon::ReadTrapTracker traps;
+    // A GPU write protects both pages; repeated writes need no second core notification.
+    REQUIRE(traps.Arm(c, PAGE * 2));
+    REQUIRE_FALSE(traps.Arm(c, PAGE * 2));
+    REQUIRE_FALSE(traps.Arm(c, PAGE));
+
+    // The first CPU read consumes only its page. The next GPU write must notify the core again.
+    traps.Subtract(c, PAGE);
+    REQUIRE_FALSE(traps.Arm(c + PAGE, PAGE));
+    REQUIRE(traps.Arm(c, PAGE));
+    REQUIRE_FALSE(traps.Arm(c, PAGE));
+    traps.Subtract(c, PAGE);
+    REQUIRE(traps.Arm(c, PAGE));
+
+    // Unmapping the whole buffer must forget both pages before a later mapping reuses them.
+    traps.Subtract(c, PAGE * 2);
+    REQUIRE(traps.Arm(c, PAGE * 2));
+}
+
+TEST_CASE("A GPU write notifies the core of its unarmed pages only", "[cpu_readback][read_traps]") {
+    VideoCommon::ReadTrapTracker traps;
+    std::vector<Range> parts;
+    const auto collect = [&](u64 address, u64 size) { parts.emplace_back(address, size); };
+    REQUIRE(traps.Arm(c, PAGE * 4, collect));
+    REQUIRE(parts == std::vector<Range>{{c, PAGE * 4}});
+
+    // CPU reads consumed the second and the last page: a rewrite of the buffer arms just those.
+    traps.Subtract(c + PAGE, PAGE);
+    traps.Subtract(c + PAGE * 3, PAGE);
+    parts.clear();
+    REQUIRE(traps.Arm(c, PAGE * 4, collect));
+    REQUIRE(parts == std::vector<Range>{{c + PAGE, PAGE}, {c + PAGE * 3, PAGE}});
+
+    // A write that also reaches past the armed range notifies the new part.
+    traps.Subtract(c, PAGE);
+    parts.clear();
+    REQUIRE(traps.Arm(c, PAGE * 6, collect));
+    REQUIRE(parts == std::vector<Range>{{c, PAGE}, {c + PAGE * 4, PAGE * 2}});
+    parts.clear();
+    REQUIRE_FALSE(traps.Arm(c, PAGE * 6, collect));
+    REQUIRE(parts.empty());
 }
