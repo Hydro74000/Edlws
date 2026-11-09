@@ -236,8 +236,7 @@ RasterizerVulkan::RasterizerVulkan(Core::Frontend::EmuWindow& emu_window_, Tegra
                      descriptor_buffer_ring, render_pass_cache, buffer_cache, texture_cache,
                      gpu.ShaderNotify()),
       accelerate_dma(buffer_cache, texture_cache, scheduler),
-      fence_manager(*this, gpu, texture_cache, buffer_cache, query_cache, device, scheduler),
-      wfi_event(device.GetLogical().CreateEvent()) {
+      fence_manager(*this, gpu, texture_cache, buffer_cache, query_cache, device, scheduler) {
     scheduler.SetQueryCache(query_cache);
     buffer_cache.SetPendingCpuWrites([this](const std::function<void(DAddr, size_t)>& callback) {
         gpu.ForEachPendingCpuWrite(callback);
@@ -1473,10 +1472,21 @@ void RasterizerVulkan::WaitForIdle() {
         return;
     }
     scheduler.RequestOutsideRenderPassOperationContext();
-    scheduler.Record([event = *wfi_event, flags](vk::CommandBuffer cmdbuf) {
-        cmdbuf.SetEvent(event, flags);
-        cmdbuf.WaitEvents(event, flags, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, {}, {}, {});
-    });
+    // Only shader storage and transform feedback writes need it: the caches order render targets,
+    // copies and compute writes before their next use, and a full barrier at each wait cost 1.3 %
+    // on Mario Kart World. A barrier, not the event this was: never reset, the event ordered
+    // nothing once signalled, and its wait at TOP_OF_PIPE made no write visible.
+    if (scheduler.TakeWritesBeforeIdle()) {
+        scheduler.Record([flags](vk::CommandBuffer cmdbuf) {
+            static constexpr VkMemoryBarrier WFI_BARRIER{
+                .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+                .pNext = nullptr,
+                .srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT,
+                .dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
+            };
+            cmdbuf.PipelineBarrier(flags, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, WFI_BARRIER);
+        });
+    }
     fence_manager.SignalOrdering();
 }
 

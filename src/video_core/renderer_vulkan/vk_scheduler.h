@@ -107,6 +107,17 @@ public:
 
     void NoteRenderPassStores() {
         render_pass_has_stores = true;
+        writes_before_idle = true;
+    }
+
+    /// Shader storage or transform feedback writes since the last wait for idle, which no cache
+    /// orders before later draws: the wait for idle has to (RasterizerVulkan::WaitForIdle).
+    void NoteWritesBeforeIdle() {
+        writes_before_idle = true;
+    }
+
+    bool TakeWritesBeforeIdle() {
+        return std::exchange(writes_before_idle, false);
     }
 
     bool RenderPassHasStores() const {
@@ -261,6 +272,7 @@ private:
     bool flush_pending{};
     bool fragment_barrier_pending{};
     bool render_pass_has_stores{};
+    bool writes_before_idle{};
     bool compute_writes_pending{};
     u32 render_pass_write_mask{};
     bool render_pass_discards{};
