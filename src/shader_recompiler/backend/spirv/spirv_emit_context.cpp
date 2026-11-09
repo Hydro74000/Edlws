@@ -1006,10 +1006,25 @@ void EmitContext::DefineGlobalMemoryFunctions(const Info& info) {
                 best_distance = OpSelect(U64, better, distance, best_distance);
                 best_index = OpSelect(U32[1], better, Const(static_cast<u32>(index)), best_index);
             }
+            // One switch on the chosen buffer: with a branch per buffer, a program with ~30
+            // candidates and ~40 accesses took NVIDIA's compiler 2.4 s per pipeline.
+            std::vector<Sirit::Literal> literals;
+            std::vector<Id> labels;
             for (size_t index = 0; index < num_buffers; ++index) {
-                access(index, bases[index],
-                       OpIEqual(U1, best_index, Const(static_cast<u32>(index))));
+                literals.push_back(static_cast<u32>(index));
+                labels.push_back(OpLabel());
             }
+            const Id default_label{OpLabel()};
+            OpSelectionMerge(default_label, spv::SelectionControlMask::MaskNone);
+            OpSwitch(best_index, default_label, literals, labels);
+            for (size_t index = 0; index < num_buffers; ++index) {
+                AddLabel(labels[index]);
+                const Id ssbo_id{ssbos[index].*ssbo_member};
+                const Id ssbo_offset{OpUConvert(U32[1], OpISub(U64, addr, bases[index]))};
+                const Id ssbo_index{OpShiftRightLogical(U32[1], ssbo_offset, Const(shift))};
+                callback(OpAccessChain(element_pointer, ssbo_id, zero, ssbo_index));
+            }
+            AddLabel(default_label);
             return;
         }
         for (size_t index = 0; index < num_buffers; ++index) {
@@ -1030,7 +1045,9 @@ void EmitContext::DefineGlobalMemoryFunctions(const Info& info) {
     }};
     const auto define_load{[&](DefPtr ssbo_member, Id element_pointer, Id type, u32 shift) {
         const Id function_type{TypeFunction(type, U64)};
-        const Id func_id{OpFunction(type, spv::FunctionControlMask::MaskNone, function_type)};
+        // Kept as calls: inlined at each access, the drivers compiled the whole buffer selection
+        // again for every one of them.
+        const Id func_id{OpFunction(type, spv::FunctionControlMask::DontInline, function_type)};
         const Id addr{OpFunctionParameter(U64)};
         define_body(ssbo_member, addr, element_pointer, shift,
                     [&](Id ssbo_pointer) { OpReturnValue(OpLoad(type, ssbo_pointer)); });
@@ -1040,7 +1057,7 @@ void EmitContext::DefineGlobalMemoryFunctions(const Info& info) {
     }};
     const auto define_write{[&](DefPtr ssbo_member, Id element_pointer, Id type, u32 shift) {
         const Id function_type{TypeFunction(void_id, U64, type)};
-        const Id func_id{OpFunction(void_id, spv::FunctionControlMask::MaskNone, function_type)};
+        const Id func_id{OpFunction(void_id, spv::FunctionControlMask::DontInline, function_type)};
         const Id addr{OpFunctionParameter(U64)};
         const Id data{OpFunctionParameter(type)};
         define_body(ssbo_member, addr, element_pointer, shift, [&](Id ssbo_pointer) {
