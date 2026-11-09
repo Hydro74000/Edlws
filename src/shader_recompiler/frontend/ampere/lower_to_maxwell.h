@@ -111,6 +111,15 @@ inline RegisterPressure PrepareRegisterPressure(const Instruction& input, u32 re
         operand(opcode == 0x981 ? 16 : 32, count);
         operand(24, input.Bits(72, 1) ? 2 : 1); break;
     }
+    case 0x927: operand(24); operand(32); break; // ISBEWR: Ra, data
+    case 0x9a8: operand(16); operand(32); break; // ATOMG: result, data (uniform address)
+    case 0x98e: // RED: address (a pair when 64-bit), data (a pair for the 64-bit types)
+        operand(24, input.Bits(72, 1) ? 2 : 1);
+        operand(32, input.Bits(73, 3) == 2 || input.Bits(73, 3) == 5 ? 2 : 1); break;
+    case 0x59f: operand(24, 2); operand(32); break; // SURED 2D: coordinates, data
+    case 0xb6c: // TXD: two result pairs, coordinates (and the ARRAY_2D layer), four gradients
+        operand(16, 2); operand(24, input.Bits(61, 3) == 5 ? 3 : 2); operand(32, 4); operand(64, 2);
+        break;
     default:
         result.valid = false; return result;
     }
@@ -237,8 +246,11 @@ inline LoweredProgram LowerToMaxwellWith(std::span<const Instruction> code, u32 
         RegisterPressure pressure{insn};
         bool requires_shadow = false;
         for (u32 bit : {16U, 24U, 32U, 64U}) {
+            // Bits 32-39 name a register in register forms and in these: TEX/TLD, TXD's gradients,
+            // the data of the stores, ATOMG, RED, SURED and ISBEWR.
             if (bit == 32 && insn.Bits(9, 3) != 1 && opcode != 0xb60 && opcode != 0xb66 && opcode != 0xf66 &&
-                opcode != 0x988) continue;
+                opcode != 0x988 && opcode != 0x986 && opcode != 0xb6c && opcode != 0x9a8 &&
+                opcode != 0x98e && opcode != 0x59f && opcode != 0x927) continue;
             const u32 reg = insn.Bits(bit, 8);
             if (reg >= shadow_boundary && reg < 255) requires_shadow = true;
         }
