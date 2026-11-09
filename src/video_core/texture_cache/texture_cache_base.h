@@ -280,6 +280,9 @@ public:
     /// Mark an image as modified from the GPU
     void MarkModification(ImageId id) noexcept;
 
+    /// Mark the image of a view a shader writes as a storage image as modified from the GPU
+    void MarkStorageWrite(const ImageViewBase& view);
+
     /// Fill image_view_ids with the graphics/compute images in indices
     void FillImageViews(std::span<ImageViewInOut> views, bool compute, bool blacklist = true);
 
