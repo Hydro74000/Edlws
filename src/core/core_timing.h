@@ -131,6 +131,11 @@ public:
     [[nodiscard]] std::chrono::microseconds GetGlobalTimeUs() const noexcept;
     [[nodiscard]] std::chrono::nanoseconds GetGlobalTimeNs() const noexcept;
 
+    /// Global time (GetGlobalTimeNs) at which emulation last resumed from a pause.
+    [[nodiscard]] std::chrono::nanoseconds GetPauseEndTime() const noexcept {
+        return std::chrono::nanoseconds{pause_end_time.load(std::memory_order_relaxed)};
+    }
+
     /// Checks for events manually and returns time in nanoseconds for next event, threadsafe.
     std::optional<s64> Advance();
 
