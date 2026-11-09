@@ -53,6 +53,20 @@ TEST_CASE("Ampere BRA.CONV always branches and BRA.DIV never does", "[video_core
     REQUIRE(CountMaxwell(dropped, 0xe24, 52) == 0);
 }
 
+TEST_CASE("Ampere ATOMG reads a high data register through a shadow copy", "[video_core][ampere]") {
+    // ATOMG.E.ADD.STRONG.GPU R1, [UR4], R220: ATOMG maps the uniform registers to R216 and up, so
+    // the data register would alias their mirrors. Read directly, the atomic added a mirror's value.
+    const std::array<Instruction, 2> code{{
+        {{0xff0179a8, 220, 0x081ee140 | 4, 0}},
+        EXIT,
+    }};
+    const auto lowered = LowerToMaxwell(code);
+    REQUIRE(static_cast<bool>(lowered));
+    const u64 atom = FindMaxwell(lowered, 0xed0, 52);
+    REQUIRE(atom != 0);
+    CHECK(((atom >> 20) & 0xff) < 216);
+}
+
 TEST_CASE("Ampere BRA.U is a plain predicated branch", "[video_core][ampere]") {
     // @!P0 BRA.U to the second EXIT, as in a Mario Kart World graphics shader: .U (mode 1) only
     // says the predicate is warp-uniform.
