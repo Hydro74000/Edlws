@@ -71,6 +71,17 @@ TEST_CASE("Nx2SemaphoreLedger: the reductions match the semaphore encodings", "[
     CHECK(Ledger::Reduce(Ledger::Op::Or, 6, 3) == 7);
     CHECK(Ledger::Reduce(Ledger::Op::Xor, 6, 3) == 5);
     CHECK(Ledger::Reduce(Ledger::Op::Write, 6, 3) == 3);
+    CHECK(Ledger::Reduce(Ledger::Op::MinSigned, 0xffffffff, 1) == 0xffffffff);
+    CHECK(Ledger::Reduce(Ledger::Op::MaxSigned, 0xffffffff, 1) == 1);
+}
+
+TEST_CASE("Nx2SemaphoreLedger: QMD release reductions keep their signed format", "[video_core][nx2]") {
+    CHECK(Ledger::Reduction(0, true) == Ledger::Op::Add);
+    CHECK(Ledger::Reduction(1, false) == Ledger::Op::Min);
+    CHECK(Ledger::Reduction(1, true) == Ledger::Op::MinSigned);
+    CHECK(Ledger::Reduction(2, false) == Ledger::Op::Max);
+    CHECK(Ledger::Reduction(2, true) == Ledger::Op::MaxSigned);
+    CHECK(Ledger::Reduction(7, true) == Ledger::Op::Xor);
 }
 
 TEST_CASE("Nx2SemaphoreLedger: a release running during a check is never counted twice",

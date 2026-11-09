@@ -47,6 +47,12 @@ KeplerCompute::KeplerCompute(MemoryManager& memory_manager_)
                      fmt::ptr(this), memory_manager.GetID());
         };
     }
+    native_qmd.skipped_release = [](u64 address, std::size_t slot, std::span<const u32, 4> words) {
+        static std::unordered_set<u32> logged;
+        if (!logged.insert(words[1]).second) return;
+        LOG_WARNING(HW_GPU, "Native QMD {:#x} skipped release slot {} with unsupported format, words={:08x}",
+                    address, slot, fmt::join(words, ","));
+    };
     execution_mask.reset();
     execution_mask[KEPLER_COMPUTE_REG_INDEX(exec_upload)] = true;
     execution_mask[KEPLER_COMPUTE_REG_INDEX(data_upload)] = true;
@@ -368,17 +374,20 @@ bool KeplerCompute::ProcessNativeMethod(Core::System& system, u32 method, u32 ar
                 return true;
             },
             [&](u64 address, u32 payload, u32 flags) {
-                if (!memory_manager.IsFullyMappedRange(address, sizeof(payload))) return false;
+                const bool four_words = (flags >> 30) == 0;
+                if (!memory_manager.IsFullyMappedRange(address, four_words ? 16 : sizeof(payload))) return false;
                 if (flags & (1U << 26)) {
+                    const auto op = Tegra::Nx2SemaphoreLedger::Reduction((flags >> 20) & 7,
+                                                                         ((flags >> 24) & 1) != 0);
                     const auto queued = memory_manager.GpuToCpuAddress(address);
                     if (queued) {
-                        Tegra::Nx2SemaphoreLedger::Get().Queue(
-                            *queued, Tegra::Nx2SemaphoreLedger::Op::Add, payload);
+                        Tegra::Nx2SemaphoreLedger::Get().Queue(*queued, op, payload);
                     }
-                    rasterizer->SignalFence([this, address, payload, queued] {
+                    rasterizer->SignalFence([this, address, payload, op, queued] {
                         u32 value{};
                         const auto write = [&] {
-                            value = memory_manager.Read<u32>(address) + payload;
+                            value = Tegra::Nx2SemaphoreLedger::Reduce(
+                                op, memory_manager.Read<u32>(address), payload);
                             memory_manager.Write<u32>(address, value);
                         };
                         if (queued) {
@@ -394,11 +403,15 @@ bool KeplerCompute::ProcessNativeMethod(Core::System& system, u32 method, u32 ar
                             return text ? u64{std::strtoull(text, nullptr, 16)} : u64{};
                         }();
                         if (watch != 0 && (address & ~u64{0xf}) == watch) {
-                            LOG_INFO(HW_GPU, "Semaphore watch: QMD release add {:#x} -> {:#x}", address, value);
+                            LOG_INFO(HW_GPU, "Semaphore watch: QMD release reduction {:#x} -> {:#x}", address, value);
                         }
                         VideoCommon::TraceNativeQuery(1, memory_manager.GetID(), address,
                             memory_manager.GpuToCpuAddress(address).value_or(0), 0, value, 1U << 26);
                     });
+                } else if (four_words) {
+                    rasterizer->Query(address, VideoCommon::QueryType::Payload,
+                        VideoCommon::QueryPropertiesFlags::IsAFence | VideoCommon::QueryPropertiesFlags::HasTimeout,
+                        payload, 0);
                 } else if (flags & (1U << 19)) {
                     // NVN2 tracks QMD completion with a max release (bit 19) into a word other
                     // releases also advance: a plain write would move it backwards and leave

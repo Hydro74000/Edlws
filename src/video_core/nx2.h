@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "common/common_types.h"
+#include "video_core/native_qmd.h"
 
 namespace Tegra {
 
@@ -360,8 +361,9 @@ inline u64 Nx2SemaphoreMirror(u64 address) {
 /// submission order; guest CPU reads still see the word only once the release ran.
 class Nx2SemaphoreLedger {
 public:
-    /// The reductions of report semaphores and QMD releases, in their encoding, then a write.
-    enum class Op : u32 { Add, Min, Max, Inc, Dec, And, Or, Xor, Write };
+    /// The reductions of report semaphores and QMD releases, in their encoding, then a write and
+    /// the signed MIN and MAX of QMD releases.
+    enum class Op : u32 { Add, Min, Max, Inc, Dec, And, Or, Xor, Write, MinSigned, MaxSigned };
 
     enum class Outcome {
         NothingQueued, ///< No release waits for the word
@@ -374,28 +376,25 @@ public:
         return ledger;
     }
 
+    /// The op of a reduction in its encoding (`reduction`, 0-7), signed or not.
+    [[nodiscard]] static Op Reduction(u32 reduction, bool is_signed) {
+        if (is_signed && (reduction == 1 || reduction == 2)) {
+            return reduction == 1 ? Op::MinSigned : Op::MaxSigned;
+        }
+        return static_cast<Op>(reduction & 7);
+    }
+
     [[nodiscard]] static u32 Reduce(Op op, u32 old, u32 value) {
         switch (op) {
-        case Op::Add:
-            return old + value;
-        case Op::Min:
-            return (std::min)(old, value);
-        case Op::Max:
-            return (std::max)(old, value);
-        case Op::Inc:
-            return old >= value ? 0 : old + 1;
-        case Op::Dec:
-            return old == 0 || old > value ? value : old - 1;
-        case Op::And:
-            return old & value;
-        case Op::Or:
-            return old | value;
-        case Op::Xor:
-            return old ^ value;
         case Op::Write:
             return value;
+        case Op::MinSigned:
+            return ReduceSemaphore(1, true, old, value);
+        case Op::MaxSigned:
+            return ReduceSemaphore(2, true, old, value);
+        default:
+            return ReduceSemaphore(static_cast<u32>(op), false, old, value);
         }
-        return value;
     }
 
     /// A release of the u32 at `device_address` queued for a fence.
