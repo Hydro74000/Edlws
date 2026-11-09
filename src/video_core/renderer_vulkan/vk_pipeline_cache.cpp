@@ -8,11 +8,13 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <iostream>
 #include <memory>
 #include <optional>
 #include <span>
+#include <string>
 #include <thread>
 #include <vector>
 #include <bit>
@@ -70,7 +72,13 @@ using VideoCommon::FileEnvironment;
 using VideoCommon::GenericEnvironment;
 using VideoCommon::GraphicsEnvironment;
 
+// Bump CACHE_VERSION for translation changes, as before: a cache from an older version is then
+// translated again at boot and written back under the new one, and the driver pipeline cache is
+// kept. Bump MIN_COMPATIBLE_CACHE_VERSION too only when the record layout (environment or key
+// serialization) changes, which deletes older caches. 20 changed the environment layout; the keys
+// last changed before it.
 constexpr u32 CACHE_VERSION = 21;
+constexpr u32 MIN_COMPATIBLE_CACHE_VERSION = 20;
 constexpr size_t VULKAN_CACHE_FLUSH_PIPELINES = 128;
 constexpr size_t VULKAN_CACHE_FLUSH_MIN_SECONDS = 30;
 constexpr std::array<char, 8> VULKAN_CACHE_MAGIC_NUMBER{'y', 'u', 'z', 'u', 'v', 'k', 'c', 'h'};
@@ -894,6 +902,8 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
     used_pipelines_saved = std::chrono::steady_clock::now();
     size_t skipped_pipelines = 0;
     size_t queued_graphics = 0;
+    VideoCommon::CacheUpgrade upgrade;
+    std::unordered_set<u64> boot_graphics; ///< Graphics keys built at boot (loading thread)
 
     if (use_vulkan_pipeline_cache) {
         vulkan_pipeline_cache_filename = base_dir / "vulkan_pipelines.bin";
@@ -981,6 +991,7 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
             return;
         }
         ++queued_graphics;
+        boot_graphics.insert(hash);
 
         workers.QueueWork([this, key, envs_ = std::move(envs), &state, &callback]() mutable {
             const PipelineStats::ScopedRole stats_role{PipelineStats::Role::Boot};
@@ -1004,7 +1015,7 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
         ++state.total;
     }};
     VideoCommon::LoadPipelines(stop_loading, pipeline_cache_filename, CACHE_VERSION, load_compute,
-                               load_graphics);
+                               load_graphics, MIN_COMPATIBLE_CACHE_VERSION, &upgrade);
 
     LOG_INFO(Render_Vulkan, "Total Pipeline Count: {}", state.total);
     if (skipped_pipelines != 0) {
@@ -1019,6 +1030,55 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
     lock.unlock();
 
     workers.WaitForRequests(stop_loading);
+
+    // A cache from an older compatible version: the records built above were translated again.
+    // Write it back under the current version without the ones that failed; the records not built
+    // at boot are kept as they are.
+    if (upgrade.from_version != 0 && !stop_loading.stop_requested()) {
+        std::vector<const std::string*> kept;
+        size_t retranslated = 0, dropped = 0;
+        for (size_t index = 0; index < upgrade.records.size(); ++index) {
+            const std::string& record = upgrade.records[index];
+            if (upgrade.is_compute[index]) {
+                ComputePipelineCacheKey key;
+                if (record.size() < sizeof(key)) {
+                    ++dropped;
+                    continue;
+                }
+                std::memcpy(&key, record.data() + record.size() - sizeof(key), sizeof(key));
+                const auto it = compute_cache.find(key);
+                if (it == compute_cache.end() || !it->second) {
+                    ++dropped;
+                    continue;
+                }
+                ++retranslated;
+            } else {
+                GraphicsPipelineCacheKey key;
+                if (record.size() < sizeof(key)) {
+                    ++dropped;
+                    continue;
+                }
+                std::memcpy(&key, record.data() + record.size() - sizeof(key), sizeof(key));
+                if (boot_graphics.contains(key.Hash())) {
+                    const auto it = graphics_cache.find(key);
+                    if (it == graphics_cache.end() || !it->second) {
+                        // Recorded again when the game builds it.
+                        disk_pipelines.erase(key.Hash());
+                        ++dropped;
+                        continue;
+                    }
+                    ++retranslated;
+                }
+            }
+            kept.push_back(&record);
+        }
+        VideoCommon::RewritePipelines(pipeline_cache_filename, CACHE_VERSION, upgrade.from_version,
+                                      kept);
+        LOG_INFO(Render_Vulkan,
+                 "Pipeline cache from version {} kept: {} records translated again, {} dropped "
+                 "({} kept for later)",
+                 upgrade.from_version, retranslated, dropped, kept.size() - retranslated);
+    }
 
     if (use_vulkan_pipeline_cache) {
         SerializeVulkanPipelineCache(vulkan_pipeline_cache_filename, vulkan_pipeline_cache,
@@ -1996,7 +2056,10 @@ vk::PipelineCache PipelineCache::LoadVulkanPipelineCache(const std::filesystem::
         }
         file.read(magic_number.data(), magic_number.size())
             .read(reinterpret_cast<char*>(&cache_version), sizeof(cache_version));
-        if (magic_number != VULKAN_CACHE_MAGIC_NUMBER || cache_version != expected_cache_version) {
+        // The driver checks its own data; a translation change only leaves entries no pipeline
+        // asks for any more.
+        if (magic_number != VULKAN_CACHE_MAGIC_NUMBER ||
+            cache_version < MIN_COMPATIBLE_CACHE_VERSION || cache_version > expected_cache_version) {
             file.close();
             if (Common::FS::RemoveFile(filename)) {
                 if (magic_number != VULKAN_CACHE_MAGIC_NUMBER) {
