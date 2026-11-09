@@ -6,8 +6,10 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <deque>
 #include <functional>
 #include <map>
+#include <unordered_map>
 #include <mutex>
 #include <utility>
 #include <vector>
@@ -350,6 +352,131 @@ inline u64 Nx2SemaphoreMirror(u64 address) {
 /// Channels suspended on a semaphore acquire. A console channel polls and sees every release;
 /// Eden writes releases in bursts when fences signal and resumes waiters only between command
 /// lists, so an acquire-equal could miss its value. Writes latch the waiters they satisfy.
+/// Semaphore releases waiting for their fence: with delayed fences (accurate GPU) a release lands
+/// in memory only once the host GPU finished the work before it, so an acquire that waits for it
+/// forced a fence and waited for the host GPU to finish everything (2,000 times a second in Mario
+/// Kart World). The ledger keeps each word's queued releases in order: an acquire that one of
+/// them will meet goes on, as with releases written at once, since the host GPU runs the work in
+/// submission order; guest CPU reads still see the word only once the release ran.
+class Nx2SemaphoreLedger {
+public:
+    /// The reductions of report semaphores and QMD releases, in their encoding, then a write.
+    enum class Op : u32 { Add, Min, Max, Inc, Dec, And, Or, Xor, Write };
+
+    enum class Outcome {
+        NothingQueued, ///< No release waits for the word
+        Meets,         ///< One of the queued releases, applied in order, meets the acquire
+        Misses,        ///< None does
+    };
+
+    static Nx2SemaphoreLedger& Get() {
+        static Nx2SemaphoreLedger ledger;
+        return ledger;
+    }
+
+    [[nodiscard]] static u32 Reduce(Op op, u32 old, u32 value) {
+        switch (op) {
+        case Op::Add:
+            return old + value;
+        case Op::Min:
+            return (std::min)(old, value);
+        case Op::Max:
+            return (std::max)(old, value);
+        case Op::Inc:
+            return old >= value ? 0 : old + 1;
+        case Op::Dec:
+            return old == 0 || old > value ? value : old - 1;
+        case Op::And:
+            return old & value;
+        case Op::Or:
+            return old | value;
+        case Op::Xor:
+            return old ^ value;
+        case Op::Write:
+            return value;
+        }
+        return value;
+    }
+
+    /// A release of the u32 at `device_address` queued for a fence.
+    void Queue(u64 device_address, Op op, u32 value) {
+        std::scoped_lock lock{mutex};
+        pending[device_address].emplace_back(op, value);
+        count.fetch_add(1, std::memory_order_release);
+    }
+
+    /// Runs the oldest release queued for the word: `write` does its memory write. The write and
+    /// the release leaving the ledger happen together for Check.
+    template <typename Write>
+    void Apply(u64 device_address, Write&& write) {
+        std::scoped_lock lock{mutex};
+        write();
+        Retire(device_address);
+    }
+
+    /// Retires the oldest release queued for the word without a write (a query dropped meanwhile).
+    void Drop(u64 device_address) {
+        std::scoped_lock lock{mutex};
+        Retire(device_address);
+    }
+
+    /// Whether the releases queued for the word, applied in order to what `read` returns, meet
+    /// `meets` at any point. The word is read outside the lock, which a write may take; a release
+    /// that runs meanwhile makes it read again.
+    template <typename Read, typename Meets>
+    [[nodiscard]] Outcome Check(u64 device_address, Read&& read, Meets&& meets) {
+        if (count.load(std::memory_order_acquire) == 0) {
+            return Outcome::NothingQueued;
+        }
+        for (;;) {
+            std::deque<std::pair<Op, u32>> releases;
+            u64 seen{};
+            {
+                std::scoped_lock lock{mutex};
+                const auto it = pending.find(device_address);
+                if (it == pending.end()) {
+                    return Outcome::NothingQueued;
+                }
+                releases = it->second;
+                seen = applied;
+            }
+            u32 word = read();
+            {
+                std::scoped_lock lock{mutex};
+                if (applied != seen) {
+                    continue;
+                }
+            }
+            for (const auto& [op, value] : releases) {
+                word = Reduce(op, word, value);
+                if (meets(word)) {
+                    return Outcome::Meets;
+                }
+            }
+            return Outcome::Misses;
+        }
+    }
+
+private:
+    void Retire(u64 device_address) {
+        ++applied;
+        const auto it = pending.find(device_address);
+        if (it == pending.end()) {
+            return;
+        }
+        it->second.pop_front();
+        count.fetch_sub(1, std::memory_order_release);
+        if (it->second.empty()) {
+            pending.erase(it);
+        }
+    }
+
+    std::mutex mutex;
+    std::unordered_map<u64, std::deque<std::pair<Op, u32>>> pending;
+    u64 applied{}; ///< Releases run or dropped, for Check
+    std::atomic<size_t> count{};
+};
+
 class Nx2SemaphoreWaiters {
 public:
     // Puller GpuSemaphoreOperation values.

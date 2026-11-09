@@ -990,6 +990,8 @@ bool IsDMALevelSafe();
 bool IsGPUFenceBehaviorDefault();
 bool IsGPUFenceBehaviorBalanced();
 bool IsGPUFenceBehaviorAccurate();
+/// Whether operations queued on a fence (semaphore releases, syncpoint increments) wait for it.
+bool AreGPUFencesDelayed();
 
 bool IsFastmemEnabled();
 void SetNceEnabled(bool is_64bit);
