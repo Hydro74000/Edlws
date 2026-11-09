@@ -44,6 +44,7 @@ add_executable(tests
     video_core/ampere_guarded_ulea.cpp
     video_core/ampere_compute_lowering.cpp
     video_core/native_macro_fifo.cpp
+    video_core/nx2_semaphore_ledger.cpp
     video_core/uniform_stream_reuse.cpp
     video_core/usage_tracker.cpp
     video_core/shader_invalidation.cpp
