@@ -300,6 +300,22 @@ void Scheduler::FlushDeferredClear() {
     EndRenderPass();
 }
 
+bool Scheduler::FlushDeferredClearOf(u32 attachments) {
+    const DeferredClear& dc = deferred_clear;
+    if (dc.framebuffer == nullptr) {
+        return false;
+    }
+    const u32 cleared = dc.color_clear_mask | (dc.depth_stencil ? 1u << 8 : 0u);
+    // A clear pass that drops multisampled attachments at its end (tilers) can't end early.
+    const bool drops = (dc.color_clear_mask != 0 && dc.framebuffer->DiscardsMsaaColor()) ||
+                       (dc.depth_stencil && dc.framebuffer->DiscardsMsaaDepthStencil());
+    if ((cleared & attachments) == 0 || drops) {
+        return false;
+    }
+    FlushDeferredClear();
+    return true;
+}
+
 void Scheduler::RequestRenderpass(const Framebuffer* framebuffer, u32 write_mask) {
     // Every write into a render pass asks for it first.
     if (deferred_clear.framebuffer == framebuffer) {

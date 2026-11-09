@@ -90,6 +90,11 @@ public:
     /// Realizes any pending deferred clear before its framebuffer can be moved or freed.
     void FlushDeferredClear();
 
+    /// Realizes a pending deferred clear of any of `attachments` (bit i for colour target i, bit 8
+    /// for depth) in a render pass of its own, ended, so a draw about to read them sees it.
+    /// False, leaving it deferred, when there is none or its pass would drop an attachment.
+    bool FlushDeferredClearOf(u32 attachments);
+
     /// Requests the current execution context to be able to execute operations only allowed outside
     /// of a renderpass.
     void RequestOutsideRenderPassOperationContext();
