@@ -1909,7 +1909,7 @@ void BufferCache<P>::Nx2NoteListWrite(BufferId buffer_id, DAddr device_addr, u64
                     if (!nx2_collect_list_copies && !entry.draw_written) {
                         entry.draw_written = true;
                         LOG_INFO(HW_GPU, "Command list page {:#x} is written by draws too: its "
-                                         "lists drain the split",
+                                         "lists wait for the work before the last host sync",
                                  page_addr);
                     }
                 }
@@ -1979,7 +1979,8 @@ bool BufferCache<P>::Nx2CopyListPages(u64 tick) {
 }
 
 template <class P>
-auto BufferCache<P>::Nx2ReadListCopy(DAddr device_addr, std::span<u8> out) -> Nx2ListRead {
+auto BufferCache<P>::Nx2ReadListCopy(DAddr device_addr, std::span<u8> out, bool past_sync)
+    -> Nx2ListRead {
     if constexpr (IS_OPENGL) {
         return Nx2ListRead::Unknown;
     } else {
@@ -2002,8 +2003,21 @@ auto BufferCache<P>::Nx2ReadListCopy(DAddr device_addr, std::span<u8> out) -> Nx
                 return Nx2ListRead::Unknown;
             }
             const Nx2ListPage& entry = it->second;
+            if (entry.draw_written) {
+                // EDEN_NX2_CMDPAGE_DRAIN=1: every list on such pages drains and flushes, as
+                // before (an A/B switch).
+                static const bool always_drain = std::getenv("EDEN_NX2_CMDPAGE_DRAIN") != nullptr;
+                if (always_drain) {
+                    return Nx2ListRead::Unknown;
+                }
+                if (!past_sync) {
+                    return Nx2ListRead::NeedsSync;
+                }
+                return entry.synced_writes == entry.writes ? Nx2ListRead::Synced
+                                                           : Nx2ListRead::Unknown;
+            }
             // Pages the CPU writes the lists of (GPU-written once, long before) stay synced.
-            if (!entry.draw_written && entry.synced_writes == entry.writes) {
+            if (entry.synced_writes == entry.writes) {
                 return Nx2ListRead::Synced;
             }
             if (!current(entry)) {

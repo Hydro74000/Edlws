@@ -165,6 +165,16 @@ public:
     /// Returns whether any of it was still queued.
     bool WaitForWriters(const std::source_location& where = std::source_location::current());
 
+    /// A host-level wait was just sent or is about to be (a semaphore or syncpoint acquire, a host
+    /// wait for idle, a GP entry with its sync bit): the GPU work before it completes before the
+    /// commands after it are fetched.
+    void NoteSync() {
+        last_sync_position = write_position;
+    }
+    /// Waits until the back executed the work sent before the last NoteSync. Returns whether any
+    /// of it was still queued.
+    bool WaitForSync(const std::source_location& where = std::source_location::current());
+
 private:
     enum class Kind : u64 {
         Wrap,   ///< The rest of the ring is unused: continue at its start
@@ -210,6 +220,7 @@ private:
         }
     }
     void SwitchEngine(Tegra::Engines::EngineInterface* engine);
+    bool WaitFor(u64 target, const char* what, const std::source_location& where);
 
     void BackLoop(std::stop_token stop_token);
     size_t Execute(const u64* entry);
@@ -222,6 +233,7 @@ private:
     // Front side.
     u64 write_position{};
     u64 last_writer_position{};
+    u64 last_sync_position{};
     u64 published_local{};
     u64 consumed_cache{};
     /// Words between publishes: small right after a drain, while the back has nothing to do.

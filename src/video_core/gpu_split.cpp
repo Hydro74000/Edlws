@@ -144,6 +144,7 @@ void GpuSplit::Stop() {
     ring.reset();
     write_position = 0;
     last_writer_position = 0;
+    last_sync_position = 0;
     published_local = 0;
     consumed_cache = 0;
     publish_every = PublishEvery;
@@ -241,14 +242,23 @@ void GpuSplit::Drain(const std::source_location& where) {
 }
 
 bool GpuSplit::WaitForWriters(const std::source_location& where) {
-    const u64 target = std::min(last_writer_position, write_position);
+    return WaitFor(std::min(last_writer_position, write_position),
+                   "Split front waiting for the back's compute and copies", where);
+}
+
+bool GpuSplit::WaitForSync(const std::source_location& where) {
+    return WaitFor(std::min(last_sync_position, write_position),
+                   "Split front waiting for the back's work before a host sync", where);
+}
+
+bool GpuSplit::WaitFor(u64 target, const char* what, const std::source_location& where) {
     consumed_cache = consumed.load(std::memory_order_acquire);
     if (consumed_cache >= target) {
         return false;
     }
     wait_target.store(target, std::memory_order_seq_cst);
     Publish();
-    const LongWait long_wait{"Split front waiting for the back's compute and copies", where};
+    const LongWait long_wait{what, where};
     for (u32 spins = 0;; ++spins) {
         consumed_cache = consumed.load(std::memory_order_acquire);
         if (consumed_cache >= target) {

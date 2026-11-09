@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <cstdio>
 
@@ -108,6 +109,10 @@ bool DmaPusher::Step() {
     }
 
     if (header.size > 0) {
+        // The entry's sync bit: the work before it completes before it is fetched.
+        if (header.sync && g_nx2_ampere.load(std::memory_order_relaxed)) {
+            VideoCommon::GpuSplit::Get().NoteSync();
+        }
         if (subchannels[dma_state.subchannel] && dma_state.method_count) {
             const auto engine = subchannel_type[dma_state.subchannel];
             const bool kepler_payload = engine == Engines::EngineTypes::KeplerCompute && dma_state.method == ComputeInline && dma_state.non_incrementing;
@@ -602,6 +607,43 @@ bool DmaPusher::IsGpuWrittenCommands(GPUVAddr address, size_t size) {
     return false;
 }
 
+namespace {
+
+// EDEN_NX2_CMDPAGE_VERIFY=1: a list on a page draws write that the wait for the last host sync
+// finds unwritten since its flush drains the split anyway and asks again, as before; the log
+// counts those the work sent after the sync wrote (they read the words before those writes).
+bool ListSyncVerifies() {
+    static const bool verify = [] {
+        const char* value = std::getenv("EDEN_NX2_CMDPAGE_VERIFY");
+        return value != nullptr && value[0] == '1';
+    }();
+    return verify;
+}
+
+using GpuWrittenList = VideoCore::RasterizerInterface::GpuWrittenList;
+
+GpuWrittenList VerifyListSync(VideoCore::RasterizerInterface* rasterizer, GpuWrittenList where,
+                              DAddr device, std::span<u8> part) {
+    static u64 lists, synced, written_after;
+    static auto since = std::chrono::steady_clock::now();
+    ++lists;
+    if (where == GpuWrittenList::Synced) {
+        ++synced;
+        VideoCommon::GpuSplit::Get().Drain();
+        where = rasterizer->ReadGpuWrittenCommandList(device, part, true);
+        written_after += where == GpuWrittenList::Unknown ? 1 : 0;
+    }
+    if (const auto now = std::chrono::steady_clock::now(); now - since >= std::chrono::seconds{10}) {
+        since = now;
+        LOG_INFO(HW_GPU, "List sync verify: {} lists on draw-written pages past the last sync, {} "
+                 "unwritten since their flush, {} of them written by work after the sync",
+                 lists, synced, written_after);
+    }
+    return where;
+}
+
+} // Anonymous namespace
+
 bool DmaPusher::ReadGpuWrittenCommands(GPUVAddr address, u32 count) {
     // The pages are marked as command list pages: from the next write on, the buffer cache copies
     // them to host memory right after the dispatch or copy that writes them and submits. The
@@ -626,9 +668,11 @@ bool DmaPusher::ReadGpuWrittenCommands(GPUVAddr address, u32 count) {
     if (!written) {
         return false;
     }
-    if (auto& split = VideoCommon::GpuSplit::Get(); split.Active()) {
+    auto& split = VideoCommon::GpuSplit::Get();
+    if (split.Active()) {
         split.WaitForWriters();
     }
+    bool past_sync = !split.Active();
     using GpuWrittenList = VideoCore::RasterizerInterface::GpuWrittenList;
     command_headers.resize_destructive(count);
     u8* const out = reinterpret_cast<u8*>(command_headers.data());
@@ -641,7 +685,17 @@ bool DmaPusher::ReadGpuWrittenCommands(GPUVAddr address, u32 count) {
         }
         GpuWrittenList where = GpuWrittenList::Synced;
         if (Tegra::Nx2IsGpuWritten(*device)) {
-            where = rasterizer->ReadGpuWrittenCommandList(*device, part);
+            where = rasterizer->ReadGpuWrittenCommandList(*device, part, past_sync);
+            if (where == GpuWrittenList::NeedsSync) {
+                // A page draws write: only the work before the last host-level wait can have
+                // written these words for this fetch (Lichii e3d8e9c605).
+                split.WaitForSync();
+                past_sync = true;
+                where = rasterizer->ReadGpuWrittenCommandList(*device, part, true);
+                if (ListSyncVerifies()) {
+                    where = VerifyListSync(rasterizer, where, *device, part);
+                }
+            }
         }
         if (where == GpuWrittenList::Unknown) {
             return false;

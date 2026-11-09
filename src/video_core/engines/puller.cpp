@@ -155,6 +155,7 @@ bool Puller::ResumeAcquire(DmaPusher& dma_pusher) {
     if (pending_acquire) {
         pending_acquire.reset();
         Nx2SemaphoreWaiters::Get().Remove(this);
+        VideoCommon::GpuSplit::Get().NoteSync();
     }
     return true;
 }
@@ -220,6 +221,7 @@ void Puller::ProcessFenceActionMethod(DmaPusher& dma_pusher) {
         // UNIMPLEMENTED_MSG("Channel Scheduling pending.");
         // WaitFence(regs.fence_action.syncpoint_id, regs.fence_value);
         OnBack([rasterizer = dma_pusher.rasterizer] { rasterizer->ReleaseFences(); });
+        VideoCommon::GpuSplit::Get().NoteSync();
         break;
     case Puller::FenceOperation::Increment:
         OnBack([rasterizer = dma_pusher.rasterizer, id = static_cast<u32>(regs.fence_action.syncpoint_id.Value())] {
@@ -284,6 +286,7 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
             return;
         }
         VideoCommon::Nx2Profile::Add(VideoCommon::Nx2Profile::Counter::AcquireChecks, 1);
+        VideoCommon::GpuSplit::Get().NoteSync();
         DrainBack();
         if (acquire.Matches(ReadSemaphoreWord(dma_pusher, acquire.address))) {
             return;
@@ -431,6 +434,7 @@ void Puller::CallPullerMethod(DmaPusher& dma_pusher, const MethodCall& method_ca
         break;
     case BufferMethods::WaitForIdle:
         OnBack([rasterizer = dma_pusher.rasterizer] { rasterizer->WaitForIdle(); });
+        VideoCommon::GpuSplit::Get().NoteSync();
         break;
     case BufferMethods::SemaphoreOperation: {
         ProcessSemaphoreTriggerMethod(dma_pusher);
