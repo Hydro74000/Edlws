@@ -612,6 +612,8 @@ namespace {
 // EDEN_NX2_CMDPAGE_VERIFY=1: a list on a page draws write that the wait for the last host sync
 // finds unwritten since its flush drains the split anyway and asks again, as before; the log
 // counts those the work sent after the sync wrote (they read the words before those writes).
+// When the page is still unwritten, its words in guest memory must be the ones a flush returns:
+// the log counts the lists on pages the caches still hold dirty and those a flush changes.
 bool ListSyncVerifies() {
     static const bool verify = [] {
         const char* value = std::getenv("EDEN_NX2_CMDPAGE_VERIFY");
@@ -622,9 +624,10 @@ bool ListSyncVerifies() {
 
 using GpuWrittenList = VideoCore::RasterizerInterface::GpuWrittenList;
 
-GpuWrittenList VerifyListSync(VideoCore::RasterizerInterface* rasterizer, GpuWrittenList where,
-                              DAddr device, std::span<u8> part) {
-    static u64 lists, synced, written_after;
+GpuWrittenList VerifyListSync(VideoCore::RasterizerInterface* rasterizer,
+                              Tegra::MemoryManager& memory_manager, GPUVAddr chunk,
+                              GpuWrittenList where, DAddr device, std::span<u8> part) {
+    static u64 lists, synced, written_after, dirty, changed;
     static auto since = std::chrono::steady_clock::now();
     ++lists;
     if (where == GpuWrittenList::Synced) {
@@ -632,12 +635,26 @@ GpuWrittenList VerifyListSync(VideoCore::RasterizerInterface* rasterizer, GpuWri
         VideoCommon::GpuSplit::Get().Drain();
         where = rasterizer->ReadGpuWrittenCommandList(device, part, true);
         written_after += where == GpuWrittenList::Unknown ? 1 : 0;
+        if (where == GpuWrittenList::Synced &&
+            memory_manager.IsMemoryDirty(chunk, part.size(), VideoCommon::CacheType::BufferCache)) {
+            ++dirty;
+            std::vector<u8> before(part.size());
+            memory_manager.ReadBlockUnsafe(chunk, before.data(), before.size());
+            VideoCommon::GpuSplit::Get().RunOnBack([&memory_manager, chunk] {
+                memory_manager.FlushRegion(chunk & ~GPUVAddr{0xfff}, 0x1000,
+                                           VideoCommon::CacheType::BufferCache);
+            });
+            std::vector<u8> after(part.size());
+            memory_manager.ReadBlockUnsafe(chunk, after.data(), after.size());
+            changed += before != after ? 1 : 0;
+        }
     }
     if (const auto now = std::chrono::steady_clock::now(); now - since >= std::chrono::seconds{10}) {
         since = now;
         LOG_INFO(HW_GPU, "List sync verify: {} lists on draw-written pages past the last sync, {} "
-                 "unwritten since their flush, {} of them written by work after the sync",
-                 lists, synced, written_after);
+                 "unwritten since their flush, {} of them written by work after the sync, {} "
+                 "still dirty in the caches, {} changed by a flush",
+                 lists, synced, written_after, dirty, changed);
     }
     return where;
 }
@@ -693,7 +710,7 @@ bool DmaPusher::ReadGpuWrittenCommands(GPUVAddr address, u32 count) {
                 past_sync = true;
                 where = rasterizer->ReadGpuWrittenCommandList(*device, part, true);
                 if (ListSyncVerifies()) {
-                    where = VerifyListSync(rasterizer, where, *device, part);
+                    where = VerifyListSync(rasterizer, memory_manager, chunk, where, *device, part);
                 }
             }
         }
@@ -721,23 +738,30 @@ void DmaPusher::FlushGpuWrittenCommands(GPUVAddr address, size_t size) {
     // that writes these words among it). The whole pages are flushed: their next lists read
     // guest memory until GPU work writes them again.
     VideoCommon::GpuSplit::Get().Drain();
-    const GPUVAddr first_page = address & ~GPUVAddr{0xfff};
-    const GPUVAddr end_page = (address + size + 0xfff) & ~GPUVAddr{0xfff};
-    if (memory_manager.IsMemoryDirty(first_page, end_page - first_page,
-                                     VideoCommon::CacheType::BufferCache)) {
-        // The flush records copies: on the back (GpuSplit::RunOnBack).
-        VideoCommon::GpuSplit::Get().RunOnBack(
-            [memory = &memory_manager, first_page, size = end_page - first_page] {
-                memory->FlushRegion(first_page, size, VideoCommon::CacheType::BufferCache);
-            });
-    }
     if (rasterizer == nullptr) {
         return;
     }
+    const GPUVAddr first_page = address & ~GPUVAddr{0xfff};
+    const GPUVAddr end_page = (address + size + 0xfff) & ~GPUVAddr{0xfff};
+    boost::container::small_vector<DAddr, 4> pages;
     for (GPUVAddr page = first_page; page < end_page; page += 0x1000) {
-        if (const auto device = memory_manager.GpuToCpuAddress(page);
-            device && Tegra::Nx2IsCommandListPage(*device)) {
-            rasterizer->NoteGpuWrittenCommandListSynced(*device);
+        if (const auto device = memory_manager.GpuToCpuAddress(page)) {
+            pages.push_back(*device);
+        }
+    }
+    if (memory_manager.IsMemoryDirty(first_page, end_page - first_page,
+                                     VideoCommon::CacheType::BufferCache)) {
+        // The flush records copies: on the back (GpuSplit::RunOnBack). It takes along the other
+        // pages draws wrote since their last flush: in Donkey Kong Bananza draws fill the entries
+        // of ~70 lists a frame in a burst, then the front fetches them one by one, and each took
+        // a GPU round trip of its own.
+        VideoCommon::GpuSplit::Get().RunOnBack(
+            [rasterizer = rasterizer, &pages] { rasterizer->FlushGpuWrittenCommandPages(pages); });
+        return;
+    }
+    for (const DAddr page : pages) {
+        if (Tegra::Nx2IsCommandListPage(page)) {
+            rasterizer->NoteGpuWrittenCommandListSynced(page);
         }
     }
 }

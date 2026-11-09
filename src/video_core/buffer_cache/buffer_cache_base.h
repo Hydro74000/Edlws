@@ -368,6 +368,11 @@ public:
     /// CPU and inline writes: they reach guest memory, so a synced page stays synced, but its copy
     /// no longer holds the page.
     void Nx2NoteListHostWrite(DAddr device_addr, u64 size);
+    /// The split drained (GpuSplit::RunOnBack): downloads what the GPU wrote to these command list
+    /// pages and to every other page draws wrote since its last flush, with one wait for the GPU,
+    /// and notes them synced. Draws fill the entries of many lists in a burst, then the front
+    /// fetches those lists one by one: the first flush serves the others.
+    void Nx2FlushListPages(std::span<const DAddr> pages);
 
     /// Return true when a CPU region is modified from the GPU
     [[nodiscard]] bool IsRegionGpuModified(DAddr addr, size_t size);
@@ -532,6 +537,15 @@ private:
 
     /// Downloads the GPU-written data of several buffers with one wait for the GPU.
     void DownloadBuffersMemory(std::span<const BufferId> buffer_ids);
+
+    /// Bytes [begin, end) of a buffer, for DownloadBufferRangesMemory.
+    struct BufferRange {
+        BufferId buffer_id;
+        DAddr begin;
+        DAddr end;
+    };
+    /// Downloads the GPU-written data in several buffer ranges with one wait for the GPU.
+    void DownloadBufferRangesMemory(std::span<const BufferRange> ranges);
 
     void DeleteBuffer(BufferId buffer_id, bool do_not_mark = false);
 

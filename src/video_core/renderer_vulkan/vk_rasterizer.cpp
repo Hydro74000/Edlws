@@ -1193,6 +1193,11 @@ void RasterizerVulkan::NoteGpuWrittenCommandListSynced(DAddr page) {
     buffer_cache.Nx2NoteListSynced(page);
 }
 
+void RasterizerVulkan::FlushGpuWrittenCommandPages(std::span<const DAddr> pages) {
+    std::scoped_lock lock{buffer_cache.mutex};
+    buffer_cache.Nx2FlushListPages(pages);
+}
+
 void RasterizerVulkan::FlushRegion(DAddr addr, u64 size, VideoCommon::CacheType which) {
     if (addr == 0 || size == 0) {
         return;
