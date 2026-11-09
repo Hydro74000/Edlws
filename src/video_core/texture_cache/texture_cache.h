@@ -573,6 +573,23 @@ void TextureCache<P>::MarkModification(ImageId id) noexcept {
 }
 
 template <class P>
+void TextureCache<P>::MarkStorageWrite(const ImageViewBase& view) {
+    MarkModification(view.image_id);
+    // As for a render target (BindRenderTarget): an image the guest reads back (pitch-linear
+    // without reactive flushing, or flushed reactively once) is downloaded with the next fence's
+    // flushes and written to guest memory when the GPU reaches that fence.
+    if (False(view.flags & ImageViewFlagBits::PreemtiveDownload)) {
+        return;
+    }
+    const ImageBase& image = slot_images[view.image_id];
+    if (True(image.flags & (ImageFlagBits::Unbacked | ImageFlagBits::TrimmedLevels)) ||
+        !IsDownloadable(image)) {
+        return;
+    }
+    uncommitted_downloads.emplace_back(PendingDownload{true, 0, view.image_id});
+}
+
+template <class P>
 void TextureCache<P>::FillImageViews(std::span<ImageViewInOut> views, bool compute, bool blacklist) {
     bool has_blacklisted = false;
     do {

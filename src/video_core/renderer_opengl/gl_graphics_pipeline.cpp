@@ -513,7 +513,7 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
             for (u32 index = 0; index < desc.count; ++index) {
                 ImageView& image_view{texture_cache.GetImageView((views_it++)->id)};
                 if (desc.is_written) {
-                    texture_cache.MarkModification(image_view.image_id);
+                    texture_cache.MarkStorageWrite(image_view);
                 }
                 images[image_binding] = image_view.StorageView(desc.type, desc.format);
                 if (texture_cache.IsRescaling(image_view)) {

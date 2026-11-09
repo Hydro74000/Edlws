@@ -383,7 +383,7 @@ inline void PushImageDescriptors(TextureCache& texture_cache,
         for (u32 index = 0; index < desc.count; ++index) {
             ImageView& image_view{texture_cache.GetImageView((views++)->id)};
             if (desc.is_written) {
-                texture_cache.MarkModification(image_view.image_id);
+                texture_cache.MarkStorageWrite(image_view);
             }
             const VkImageView vk_image_view{image_view.StorageView(desc.type, desc.format)};
             guest_descriptor_queue.AddImage(vk_image_view);
