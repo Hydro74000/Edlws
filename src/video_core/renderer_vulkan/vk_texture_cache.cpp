@@ -1436,6 +1436,11 @@ void TextureCacheRuntime::BarrierFeedbackLoop(u32 attachments) {
     // one (Scheduler::EndRenderPass). If none of them wrote the attachments read, the reads
     // already see the last pass; one that drops an attachment at its end can't end early without
     // losing the drawing.
+    // A clear deferred to the next pass's load ops would land in the very pass whose draw reads it
+    // (Donkey Kong Bananza samples a target it has just cleared): it gets a pass of its own.
+    if (scheduler.FlushDeferredClearOf(attachments)) {
+        return;
+    }
     if ((scheduler.RenderPassWriteMask() & attachments) == 0 || scheduler.RenderPassDiscards()) {
         return;
     }
