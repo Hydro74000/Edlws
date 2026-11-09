@@ -99,11 +99,14 @@ void GpuSplit::MaybeStart(Core::System& system_) {
         return;
     }
     // The front reads command lists straight from guest memory; a read that flushes the caches
-    // first (safe DMA, accurate GPU) would touch back-owned state. The settings can change
-    // mid-game: hand the engines back to the front (and start again when they allow it).
-    const bool safe_reads = Settings::IsDMALevelDefault() ? Settings::IsGPULevelHigh()
-                                                          : Settings::IsDMALevelSafe();
-    const bool allowed = !safe_reads && !Settings::IsGPULevelHigh() &&
+    // first would touch back-owned state. Lists the GPU writes are flushed by the back before the
+    // front reads them (DmaPusher, GPU-written pages): at accurate GPU every list read on memory
+    // the caches held newer was one of those in Mario Kart World and Donkey Kong Bananza, so the
+    // split keeps running there (EDEN_NX2_SPLIT_VERIFY counts the others). Only safe DMA, chosen
+    // on its own, flushes every list: then the engines go back to the front. The settings can
+    // change mid-game: hand the engines back to the front (and start again when they allow it).
+    const bool safe_reads = !Settings::IsDMALevelDefault() && Settings::IsDMALevelSafe();
+    const bool allowed = !safe_reads &&
                          Settings::values.renderer_backend.GetValue() == Settings::RendererBackend::Vulkan;
     if (active && !allowed) {
         Drain();
