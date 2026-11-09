@@ -186,6 +186,20 @@ bool DmaPusher::Step() {
         // safe read below would flush (with the split, the front can't tell: it reads memory
         // unflushed anyway). Entries on pages the GPU writes (culling) always take the flushing
         // read: their words at submit time are an older frame's.
+        // EDEN_NX2_SPLIT_VERIFY: with the split at accurate GPU, a list off the GPU-written pages
+        // on memory the caches hold newer would be read stale (the safe read isn't taken).
+        if (static const bool verify = std::getenv("EDEN_NX2_SPLIT_VERIFY") != nullptr;
+            verify && !gpu_written && VideoCommon::GpuSplit::Get().Active() &&
+            Settings::IsGPULevelHigh() &&
+            memory_manager.IsMemoryDirty(dma_state.dma_get, list_bytes)) {
+            static std::atomic<u64> stale{};
+            if (const u64 count = stale.fetch_add(1, std::memory_order_relaxed); count < 16 ||
+                                                                               (count & 1023) == 0) {
+                LOG_ERROR(HW_GPU, "Split verify: list at {:#x} ({} bytes) read on memory the caches "
+                          "hold newer, off the GPU-written pages ({} so far)",
+                          dma_state.dma_get, list_bytes, count + 1);
+            }
+        }
         const bool submitted = dma_pushbuffer_subindex < command_list.submitted_offsets.size() &&
                                command_list.submitted_offsets[dma_pushbuffer_subindex] !=
                                    CommandList::NotCopied &&
