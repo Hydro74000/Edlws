@@ -55,6 +55,15 @@ void ReleaseFencesOnBack(DmaPusher& dma_pusher) {
         [rasterizer = dma_pusher.rasterizer] { rasterizer->ReleaseFences(); });
 }
 
+// Whether a release queued for its fence (Nx2SemaphoreLedger) meets the acquire.
+template <typename Acquire>
+bool AcquireMetByQueuedRelease(DmaPusher& dma_pusher, const Acquire& acquire, u64 device) {
+    return Nx2SemaphoreLedger::Get().Check(
+               device, [&] { return ReadSemaphoreWord(dma_pusher, acquire.address); },
+               [&](u32 value) { return acquire.Matches(value); }) ==
+           Nx2SemaphoreLedger::Outcome::Meets;
+}
+
 // With the GPU thread split (gpu_split.h) the rasterizer belongs to the back thread: work that
 // only feeds it runs there in order; reads of what it wrote first wait for it (DrainBack).
 template <typename Func>
@@ -104,6 +113,13 @@ bool Puller::CanResumeAcquire(DmaPusher& dma_pusher) {
     }
     if (pending_acquire->Matches(current)) {
         return true;
+    }
+    if (Settings::AreGPUFencesDelayed()) {
+        if (const auto device = dma_pusher.memory_manager.GpuToCpuAddress(pending_acquire->address);
+            device && AcquireMetByQueuedRelease(dma_pusher, *pending_acquire, *device)) {
+            VideoCommon::Nx2Profile::Add(VideoCommon::Nx2Profile::Counter::AcquireQueuedMet, 1);
+            return true;
+        }
     }
     // A release queued after the acquire released the fences can sit among the operations that
     // wait for the next fence (a semaphore release at High GPU accuracy goes through
@@ -275,8 +291,19 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
         // Registered before the fences run, so a release among them that meets the value counts
         // even if a later one overwrites it.
         auto& waiters = Nx2SemaphoreWaiters::Get();
-        if (const auto device = dma_pusher.memory_manager.GpuToCpuAddress(acquire.address)) {
+        const auto device = dma_pusher.memory_manager.GpuToCpuAddress(acquire.address);
+        if (device) {
             waiters.Add(this, *device, acquire.value, acquire.operation);
+        }
+        // Releases wait for their fence with delayed fences: forcing one waits for the host GPU
+        // to finish all the work. A queued release that meets the value lets the channel go on,
+        // the host GPU running the work in order. Otherwise the release may come from somewhere
+        // the ledger doesn't see: the fences are released as before.
+        if (device && Settings::AreGPUFencesDelayed() &&
+            AcquireMetByQueuedRelease(dma_pusher, acquire, *device)) {
+            VideoCommon::Nx2Profile::Add(VideoCommon::Nx2Profile::Counter::AcquireQueuedMet, 1);
+            waiters.Remove(this);
+            return;
         }
         ReleaseFencesOnBack(dma_pusher);
         if (!waiters.Latched(this) && !acquire.Matches(ReadSemaphoreWord(dma_pusher, acquire.address))) {

@@ -273,9 +273,14 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
     u8* pointer = impl->device_memory.template GetPointer<u8>(cpu_addr);
     u8* pointer_timestamp = impl->device_memory.template GetPointer<u8>(cpu_addr + 8);
     bool is_synced = (Settings::IsGPUFenceBehaviorDefault() ? !Settings::IsGPULevelHigh() : !Settings::IsGPUFenceBehaviorBalanced() && !Settings::IsGPUFenceBehaviorAccurate()) && is_fence;
+    // A semaphore release queued for a fence is in the ledger acquires check (nx2.h).
+    const bool in_ledger = counter_type == QueryType::Payload;
     std::function<void()> operation([this, is_synced, streamer, query_base = query, query_location,
-                                     pointer, pointer_timestamp, cpu_addr] {
+                                     pointer, pointer_timestamp, cpu_addr, in_ledger] {
         if (True(query_base->flags & QueryFlagBits::IsInvalidated)) {
+            if (in_ledger) {
+                Tegra::Nx2SemaphoreLedger::Get().Drop(cpu_addr);
+            }
             if (!is_synced) [[likely]] {
                 impl->pending_unregister.push_back(query_location);
             }
@@ -284,6 +289,9 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
         if (False(query_base->flags & QueryFlagBits::IsFinalValueSynced)) [[unlikely]] {
             LOG_ERROR(HW_GPU,
                       "Query report value not synchronized. Consider increasing GPU accuracy.");
+            if (in_ledger) {
+                Tegra::Nx2SemaphoreLedger::Get().Drop(cpu_addr);
+            }
             if (!is_synced) [[likely]] {
                 impl->pending_unregister.push_back(query_location);
             }
@@ -291,13 +299,20 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
         }
         query_base->value += streamer->GetAmendValue();
         streamer->SetAccumulationValue(query_base->value);
-        if (True(query_base->flags & QueryFlagBits::HasTimestamp)) {
-            u64 timestamp = impl->gpu.GetTicks();
-            std::memcpy(pointer_timestamp, &timestamp, sizeof(timestamp));
-            std::memcpy(pointer, &query_base->value, sizeof(query_base->value));
+        const auto write = [&] {
+            if (True(query_base->flags & QueryFlagBits::HasTimestamp)) {
+                u64 timestamp = impl->gpu.GetTicks();
+                std::memcpy(pointer_timestamp, &timestamp, sizeof(timestamp));
+                std::memcpy(pointer, &query_base->value, sizeof(query_base->value));
+            } else {
+                u32 value = static_cast<u32>(query_base->value);
+                std::memcpy(pointer, &value, sizeof(value));
+            }
+        };
+        if (in_ledger) {
+            Tegra::Nx2SemaphoreLedger::Get().Apply(cpu_addr, write);
         } else {
-            u32 value = static_cast<u32>(query_base->value);
-            std::memcpy(pointer, &value, sizeof(value));
+            write();
         }
         Tegra::Nx2SemaphoreWaiters::Get().OnWrite(cpu_addr, static_cast<u32>(query_base->value));
         if (!is_synced) [[likely]] {
@@ -305,6 +320,10 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
         }
     });
     if (is_fence) {
+        if (in_ledger) {
+            Tegra::Nx2SemaphoreLedger::Get().Queue(cpu_addr, Tegra::Nx2SemaphoreLedger::Op::Write,
+                                                   payload);
+        }
         impl->rasterizer.SignalFence(std::move(operation));
     } else {
         if (!Settings::IsGPULevelHigh() && counter_type == QueryType::Payload) {
@@ -319,6 +338,10 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
             Tegra::Nx2SemaphoreWaiters::Get().OnWrite(cpu_addr, payload);
             streamer->Free(new_query_id);
             return;
+        }
+        if (in_ledger) {
+            Tegra::Nx2SemaphoreLedger::Get().Queue(cpu_addr, Tegra::Nx2SemaphoreLedger::Op::Write,
+                                                   payload);
         }
         impl->rasterizer.SyncOperation(std::move(operation));
     }
