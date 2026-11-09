@@ -187,3 +187,15 @@ TEST_CASE("Usage tracker resets every page tracked since the last reset",
     REQUIRE(tracker.IsUsed(63 * 4096 + 4032, 64));
     REQUIRE_FALSE(tracker.IsUsed(0, 63 * 4096 + 4032));
 }
+
+TEST_CASE("Usage tracker ignores blocks before a range within one page", "[video_core][usage_tracker]") {
+    VideoCommon::UsageTracker tracker{16384};
+    tracker.Track(0, 64);
+    // The range's own blocks are unused: the block before it in the same page doesn't count.
+    REQUIRE_FALSE(tracker.IsUsed(128, 64));
+    REQUIRE_FALSE(tracker.IsUsed(4032, 64));
+    REQUIRE(tracker.IsUsed(32, 64));
+    tracker.Track(4096 + 128, 64);
+    REQUIRE_FALSE(tracker.IsUsed(4096 + 256, 16));
+    REQUIRE(tracker.IsUsed(4096 + 160, 16));
+}

@@ -77,6 +77,10 @@ public:
         if (IsPageUsed(page, offset, size)) {
             return true;
         }
+        if (page == page_end) {
+            // Checking the tail below would count the page from its start, before the range.
+            return false;
+        }
         for (size_t i = page + 1; i < page_end; i++) {
             if (pages[i] != 0) {
                 return true;
