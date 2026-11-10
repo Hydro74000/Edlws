@@ -1570,12 +1570,14 @@ inline LoweredProgram LowerToMaxwellWith(std::span<const Instruction> code, u32 
             // rows g / g+8 at columns 2i, 2i+1. Rebuilt from shuffles; each product is summed in f32
             // (FFMA) and the sums are rounded to half after every eight products, as Eden's lowering
             // (checked against a CPU reference of the console's results) does.
-            // The expansion is correct but large: title 4's 372-HMMA network takes the host driver
-            // minutes to compile, so it is only lowered when the caller asks (`tensor`: a game
-            // DLSS evaluation the game's own network may draw, or Donkey Kong Bananza's programs),
-            // or with EDEN_NX2_TENSOR set (the QMD still completes when rejected).
-            // EDEN_NX2_TENSOR=stub keeps the rest of the program but makes every HMMA D = C, and
-            // EDEN_NX2_TENSOR=compact forces the compact form below.
+            // HMMA is lowered when the caller asks (`tensor`, KeplerCompute::EmulatesNativeTensor-
+            // Programs), or with EDEN_NX2_TENSOR set (the QMD still completes when rejected). With
+            // `compact_tensor` an unguarded one becomes a call of the compact form below; the
+            // expansion is correct but large (title 4's 372-HMMA network took the host driver
+            // minutes to compile), and stays for guarded HMMA and devices that cannot create
+            // compute shaders 32 threads wide. EDEN_NX2_TENSOR=1 forces the expansion,
+            // EDEN_NX2_TENSOR=compact the compact form, and EDEN_NX2_TENSOR=stub keeps the rest
+            // of the program but makes every HMMA D = C.
             static const char* const forced_mode = std::getenv("EDEN_NX2_TENSOR");
             const char* const mode = forced_mode      ? forced_mode
                                      : !tensor        ? nullptr
