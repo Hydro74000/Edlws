@@ -5,6 +5,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 add_executable(tests
+    audio_core/adpcm_decode.cpp
     common/bit_field.cpp
     common/bit_util.cpp
     common/cityhash.cpp
