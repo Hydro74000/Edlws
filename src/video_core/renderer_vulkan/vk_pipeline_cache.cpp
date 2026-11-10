@@ -77,7 +77,7 @@ using VideoCommon::GraphicsEnvironment;
 // kept. Bump MIN_COMPATIBLE_CACHE_VERSION too only when the record layout (environment or key
 // serialization) changes, which deletes older caches. 20 changed the environment layout; the keys
 // last changed before it.
-constexpr u32 CACHE_VERSION = 21;
+constexpr u32 CACHE_VERSION = 22;
 constexpr u32 MIN_COMPATIBLE_CACHE_VERSION = 20;
 constexpr size_t VULKAN_CACHE_FLUSH_PIPELINES = 128;
 constexpr size_t VULKAN_CACHE_FLUSH_MIN_SECONDS = 30;
@@ -261,9 +261,11 @@ ShaderTranslationKey MakeShaderTranslationKey(const GraphicsPipelineCacheKey& pi
         std::ranges::transform(state.attributes, key.generic_input_types.begin(),
                                &CastAttributeType);
     }
-    // A fixed point size is written by the last vertex stage when points are drawn, and by a
-    // geometry stage that outputs points (a generated passthrough one outputs what is drawn).
-    if (key.input_topology == Shader::InputTopology::Points || has_geometry) {
+    // A fixed point size is written by the last vertex stage when points are drawn, by a
+    // geometry stage that outputs points (a generated passthrough one outputs what is drawn) and
+    // by a mesh program that outputs points.
+    if (key.input_topology == Shader::InputTopology::Points || has_geometry ||
+        state.mesh_enabled != 0) {
         key.point_size = state.point_size;
     }
     if (state.xfb_enabled) {
@@ -352,6 +354,9 @@ Shader::RuntimeInfo MakeRuntimeInfo(std::span<const Shader::IR::Program> program
         break;
     case Shader::Stage::Mesh:
         info.convert_depth_mode = key.convert_depth_mode;
+        if (program.mesh.topology == 0) {
+            info.fixed_state_point_size = point_size;
+        }
         break;
     case Shader::Stage::Geometry:
         if (program.output_topology == Shader::OutputTopology::PointList) {
