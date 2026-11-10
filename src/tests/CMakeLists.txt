@@ -5,13 +5,18 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 add_executable(tests
+    audio_core/adpcm_decode.cpp
+    video_core/shader_object_pool.cpp
+    video_core/join_whole_copy.cpp
     common/bit_field.cpp
+    common/bit_util.cpp
     common/cityhash.cpp
     common/container_hash.cpp
     common/fibers.cpp
     common/game_presets.cpp
     common/fs_replace_dir.cpp
     common/host_memory.cpp
+    common/multi_level_page_table.cpp
     common/page_table.cpp
     common/param_package.cpp
     common/range_map.cpp
@@ -47,6 +52,7 @@ add_executable(tests
     video_core/native_qmd.cpp
     video_core/framebuffer_limits.cpp
     video_core/nx2_semaphore_ledger.cpp
+    video_core/nx2_semaphore_mirror.cpp
     video_core/uniform_stream_reuse.cpp
     video_core/usage_tracker.cpp
     video_core/shader_invalidation.cpp
