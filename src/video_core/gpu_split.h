@@ -170,10 +170,19 @@ public:
     /// commands after it are fetched.
     void NoteSync() {
         last_sync_position = write_position;
+        synced_writer_position = last_writer_position;
     }
     /// Waits until the back executed the work sent before the last NoteSync. Returns whether any
     /// of it was still queued.
     bool WaitForSync(const std::source_location& where = std::source_location::current());
+    /// Whether the back has yet to run compute or copy work sent before the last NoteSync.
+    [[nodiscard]] bool HasQueuedSyncedWriters() const {
+        return consumed.load(std::memory_order_acquire) <
+               (std::min)(synced_writer_position, write_position);
+    }
+    /// Waits until the back executed the compute and copy work sent before the last NoteSync
+    /// (not the work after it). Returns whether any of it was still queued.
+    bool WaitForSyncedWriters(const std::source_location& where = std::source_location::current());
 
 private:
     enum class Kind : u64 {
@@ -233,6 +242,8 @@ private:
     // Front side.
     u64 write_position{};
     u64 last_writer_position{};
+    /// last_writer_position at the last NoteSync
+    u64 synced_writer_position{};
     u64 last_sync_position{};
     u64 published_local{};
     u64 consumed_cache{};

@@ -145,6 +145,7 @@ void GpuSplit::Stop() {
     write_position = 0;
     last_writer_position = 0;
     last_sync_position = 0;
+    synced_writer_position = 0;
     published_local = 0;
     consumed_cache = 0;
     publish_every = PublishEvery;
@@ -244,6 +245,12 @@ void GpuSplit::Drain(const std::source_location& where) {
 bool GpuSplit::WaitForWriters(const std::source_location& where) {
     return WaitFor(std::min(last_writer_position, write_position),
                    "Split front waiting for the back's compute and copies", where);
+}
+
+bool GpuSplit::WaitForSyncedWriters(const std::source_location& where) {
+    return WaitFor(std::min(synced_writer_position, write_position),
+                   "Split front waiting for the back's compute and copies before a host sync",
+                   where);
 }
 
 bool GpuSplit::WaitForSync(const std::source_location& where) {
