@@ -38,6 +38,7 @@
 #include "video_core/host1x/host1x.h"
 #include "video_core/host1x/syncpoint_manager.h"
 #include "video_core/memory_manager.h"
+#include "video_core/nx2.h"
 #include "video_core/renderer_base.h"
 #include "video_core/shader_notify.h"
 
@@ -555,9 +556,14 @@ bool GPU::HasSuspendedChannels() const {
     return impl->scheduler.HasPendingChannelsAnyThread();
 }
 
-bool GPU::WaitsOnCpu() const {
+bool GPU::WaitsOnCpu(bool host_too) const {
     return impl->gpu_thread.FrontIdle() && VideoCommon::GpuSplit::Get().BackIdle() &&
-           !impl->renderer->ReadRasterizer()->HostBusy();
+           Nx2SemaphoreLedger::Get().Empty() &&
+           (!host_too || !impl->renderer->ReadRasterizer()->HostBusy());
+}
+
+u64 GPU::FrontProgress() const {
+    return impl->gpu_thread.FrontProgress();
 }
 
 bool GPU::UseNvdec() const {
