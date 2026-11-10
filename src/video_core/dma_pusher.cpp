@@ -174,12 +174,18 @@ bool DmaPusher::Step() {
         // stalled, instead of it filling the ring (most hitches left on a GTX 1070).
         const size_t list_bytes = size_t{header.size} * sizeof(u32);
         bool gpu_written = IsGpuWrittenCommands(dma_state.dma_get, list_bytes);
+        // Only the work sent before the last host-level wait (NoteSync: a GP entry's sync bit, a
+        // host wait for idle, an acquire) is ordered before this fetch on the hardware: the
+        // PBDMA fetches ahead of the engines otherwise. Waiting for every queued writer held Mario
+        // Kart World's front 58-116 ms at a time at boot (approach from Lichii 1a5e995a38).
+        // The pages are checked again after the wait either way, and marked as unwritten only
+        // once no writer at all is queued.
         if (auto& split = VideoCommon::GpuSplit::Get();
             !gpu_written && split.Active() && split.HasQueuedWriters() &&
             !AreListPagesChecked(dma_state.dma_get, list_bytes)) {
-            split.WaitForWriters();
+            split.WaitForSyncedWriters();
             gpu_written = IsGpuWrittenCommands(dma_state.dma_get, list_bytes);
-            if (!gpu_written) {
+            if (!gpu_written && !split.HasQueuedWriters()) {
                 MarkListPagesChecked(dma_state.dma_get, list_bytes);
             }
         }
