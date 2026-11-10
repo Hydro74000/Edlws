@@ -366,16 +366,23 @@ public:
     }
     /// True when it recorded copies, which the GPU completes at `tick` (the caller submits).
     bool Nx2CopyListPages(u64 tick);
-    enum class Nx2ListRead { Unknown, Copied, Synced };
+    enum class Nx2ListRead { Unknown, Copied, Synced, NeedsSync };
     /// Front thread: Synced when guest memory holds the page `device_addr` lies in (flushed and
     /// written by no GPU work since), else Copied with `out` filled from the copy of its last
     /// write once the GPU is done with it. Unknown otherwise: the caller drains and flushes.
-    Nx2ListRead Nx2ReadListCopy(DAddr device_addr, std::span<u8> out);
+    /// Pages draws write are only Synced or Unknown, and NeedsSync until `past_sync`: the split's
+    /// back ran the work before the last host-level wait (GpuSplit::WaitForSync).
+    Nx2ListRead Nx2ReadListCopy(DAddr device_addr, std::span<u8> out, bool past_sync);
     /// Front thread, the split drained: the command list page was flushed to guest memory.
     void Nx2NoteListSynced(DAddr page);
     /// CPU and inline writes: they reach guest memory, so a synced page stays synced, but its copy
     /// no longer holds the page.
     void Nx2NoteListHostWrite(DAddr device_addr, u64 size);
+    /// The split drained (GpuSplit::RunOnBack): downloads what the GPU wrote to these command list
+    /// pages and to every other page draws wrote since its last flush, with one wait for the GPU,
+    /// and notes them synced. Draws fill the entries of many lists in a burst, then the front
+    /// fetches those lists one by one: the first flush serves the others.
+    void Nx2FlushListPages(std::span<const DAddr> pages);
 
     /// Return true when a CPU region is modified from the GPU
     [[nodiscard]] bool IsRegionGpuModified(DAddr addr, size_t size);
@@ -540,6 +547,15 @@ private:
 
     /// Downloads the GPU-written data of several buffers with one wait for the GPU.
     void DownloadBuffersMemory(std::span<const BufferId> buffer_ids);
+
+    /// Bytes [begin, end) of a buffer, for DownloadBufferRangesMemory.
+    struct BufferRange {
+        BufferId buffer_id;
+        DAddr begin;
+        DAddr end;
+    };
+    /// Downloads the GPU-written data in several buffer ranges with one wait for the GPU.
+    void DownloadBufferRangesMemory(std::span<const BufferRange> ranges);
 
     void DeleteBuffer(BufferId buffer_id, bool do_not_mark = false);
 
@@ -711,8 +727,10 @@ private:
         u32 copy_begin{};  ///< Bytes of the page the copy holds (a buffer can end inside it)
         u32 copy_end{};
         /// Written outside a compute dispatch or a DMA copy (a draw's storage writes) at least
-        /// once: the front can't tell from what it sent whether such a write is still queued, so
-        /// the page's lists always drain the split instead of reading a copy.
+        /// once: the front can't tell from what it sent which draws write the page, so it reads
+        /// no copy. A draw's writes reach a pushbuffer fetch only after a host-level wait, so the
+        /// page's lists read guest memory once the back ran the work before the last such wait
+        /// and no write came since the front flushed the page (Nx2ReadListCopy).
         bool draw_written{};
         std::optional<Nx2Staging> copy;
     };

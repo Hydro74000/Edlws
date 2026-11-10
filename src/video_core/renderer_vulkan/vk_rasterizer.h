@@ -100,8 +100,10 @@ public:
     void FlushAll() override;
     void FlushRegion(DAddr addr, u64 size,
                      VideoCommon::CacheType which = VideoCommon::CacheType::All) override;
-    GpuWrittenList ReadGpuWrittenCommandList(DAddr addr, std::span<u8> out) override;
+    GpuWrittenList ReadGpuWrittenCommandList(DAddr addr, std::span<u8> out,
+                                             bool past_sync) override;
     void NoteGpuWrittenCommandListSynced(DAddr page) override;
+    void FlushGpuWrittenCommandPages(std::span<const DAddr> pages) override;
     bool MustFlushRegion(DAddr addr, u64 size,
                          VideoCommon::CacheType which = VideoCommon::CacheType::All) override;
     VideoCore::RasterizerDownloadArea GetFlushArea(DAddr addr, u64 size) override;

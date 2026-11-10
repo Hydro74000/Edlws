@@ -108,14 +108,28 @@ public:
         Unknown, ///< Neither: the caller drains, flushes the page and notes it synced
         Copied,  ///< `out` (within one 4 KiB page) is filled from the copy made after its writer
         Synced,  ///< Guest memory holds the page: no GPU work wrote it since it was flushed
+        NeedsSync, ///< A page draws write: ask again once past the last host sync
     };
+    /// `past_sync`: the split's back ran the work before the last host-level wait
+    /// (GpuSplit::WaitForSync).
     virtual GpuWrittenList ReadGpuWrittenCommandList([[maybe_unused]] DAddr addr,
-                                                     [[maybe_unused]] std::span<u8> out) {
+                                                     [[maybe_unused]] std::span<u8> out,
+                                                     [[maybe_unused]] bool past_sync) {
         return GpuWrittenList::Unknown;
     }
 
     /// Switch 2: the front flushed this command list page with the split drained.
     virtual void NoteGpuWrittenCommandListSynced([[maybe_unused]] DAddr page) {}
+
+    /// Switch 2, the split drained (on its back): flushes these command list pages (device
+    /// addresses of 4 KiB pages), with the other pages draws wrote since their last flush, and
+    /// notes them synced.
+    virtual void FlushGpuWrittenCommandPages(std::span<const DAddr> pages) {
+        for (const DAddr page : pages) {
+            FlushRegion(page, 0x1000, VideoCommon::CacheType::BufferCache);
+            NoteGpuWrittenCommandListSynced(page);
+        }
+    }
 
     /// Check if the the specified memory area requires flushing to CPU Memory.
     virtual bool MustFlushRegion(DAddr addr, u64 size,

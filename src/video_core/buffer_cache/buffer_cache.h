@@ -1909,7 +1909,7 @@ void BufferCache<P>::Nx2NoteListWrite(BufferId buffer_id, DAddr device_addr, u64
                     if (!nx2_collect_list_copies && !entry.draw_written) {
                         entry.draw_written = true;
                         LOG_INFO(HW_GPU, "Command list page {:#x} is written by draws too: its "
-                                         "lists drain the split",
+                                         "lists wait for the work before the last host sync",
                                  page_addr);
                     }
                 }
@@ -1979,7 +1979,8 @@ bool BufferCache<P>::Nx2CopyListPages(u64 tick) {
 }
 
 template <class P>
-auto BufferCache<P>::Nx2ReadListCopy(DAddr device_addr, std::span<u8> out) -> Nx2ListRead {
+auto BufferCache<P>::Nx2ReadListCopy(DAddr device_addr, std::span<u8> out, bool past_sync)
+    -> Nx2ListRead {
     if constexpr (IS_OPENGL) {
         return Nx2ListRead::Unknown;
     } else {
@@ -2002,8 +2003,21 @@ auto BufferCache<P>::Nx2ReadListCopy(DAddr device_addr, std::span<u8> out) -> Nx
                 return Nx2ListRead::Unknown;
             }
             const Nx2ListPage& entry = it->second;
+            if (entry.draw_written) {
+                // EDEN_NX2_CMDPAGE_DRAIN=1: every list on such pages drains and flushes, as
+                // before (an A/B switch).
+                static const bool always_drain = std::getenv("EDEN_NX2_CMDPAGE_DRAIN") != nullptr;
+                if (always_drain) {
+                    return Nx2ListRead::Unknown;
+                }
+                if (!past_sync) {
+                    return Nx2ListRead::NeedsSync;
+                }
+                return entry.synced_writes == entry.writes ? Nx2ListRead::Synced
+                                                           : Nx2ListRead::Unknown;
+            }
             // Pages the CPU writes the lists of (GPU-written once, long before) stay synced.
-            if (!entry.draw_written && entry.synced_writes == entry.writes) {
+            if (entry.synced_writes == entry.writes) {
                 return Nx2ListRead::Synced;
             }
             if (!current(entry)) {
@@ -2064,6 +2078,52 @@ void BufferCache<P>::Nx2NoteListHostWrite(DAddr device_addr, u64 size) {
             ++entry.writes;
             if (synced) {
                 entry.synced_writes = entry.writes;
+            }
+        }
+    }
+}
+
+template <class P>
+void BufferCache<P>::Nx2FlushListPages(std::span<const DAddr> pages) {
+    constexpr DAddr page_size = DAddr{1} << Tegra::Nx2WrittenPageBits;
+    if constexpr (IS_OPENGL || !USE_MEMORY_MAPS) {
+        for (const DAddr page : pages) {
+            DownloadMemory(page, page_size);
+            if (Tegra::Nx2IsCommandListPage(page)) {
+                Nx2NoteListSynced(page);
+            }
+        }
+    } else {
+        // EDEN_NX2_CMDPAGE_FLUSH_ONE=1: only the pages of the list being fetched, as before (an
+        // A/B switch).
+        static const bool flush_one = std::getenv("EDEN_NX2_CMDPAGE_FLUSH_ONE") != nullptr;
+        boost::container::small_vector<DAddr, 64> flushed(pages.begin(), pages.end());
+        if (!flush_one) {
+            std::scoped_lock lock{nx2_list_mutex};
+            for (const auto& [page, entry] : nx2_list_pages) {
+                if (entry.draw_written && entry.synced_writes != entry.writes) {
+                    flushed.push_back(page);
+                }
+            }
+        }
+        std::ranges::sort(flushed);
+        const auto duplicates = std::ranges::unique(flushed);
+        flushed.erase(duplicates.begin(), duplicates.end());
+        std::vector<BufferRange> ranges;
+        for (const DAddr page : flushed) {
+            ForEachBufferInRange(page, page_size, [&](BufferId buffer_id, Buffer& buffer) {
+                const DAddr begin = (std::max)(page, buffer.CpuAddr());
+                const DAddr end =
+                    (std::min)(page + page_size, buffer.CpuAddr() + buffer.SizeBytes());
+                if (begin < end) {
+                    ranges.push_back({buffer_id, begin, end});
+                }
+            });
+        }
+        DownloadBufferRangesMemory(ranges);
+        for (const DAddr page : flushed) {
+            if (Tegra::Nx2IsCommandListPage(page)) {
+                Nx2NoteListSynced(page);
             }
         }
     }
@@ -2481,17 +2541,29 @@ void BufferCache<P>::DownloadBufferMemory(Buffer& buffer) {
 
 template <class P>
 void BufferCache<P>::DownloadBuffersMemory(std::span<const BufferId> buffer_ids) {
+    std::vector<BufferRange> ranges;
+    ranges.reserve(buffer_ids.size());
+    for (const BufferId buffer_id : buffer_ids) {
+        const Buffer& buffer = slot_buffers[buffer_id];
+        ranges.push_back({buffer_id, buffer.CpuAddr(), buffer.CpuAddr() + buffer.SizeBytes()});
+    }
+    DownloadBufferRangesMemory(ranges);
+}
+
+template <class P>
+void BufferCache<P>::DownloadBufferRangesMemory(std::span<const BufferRange> ranges) {
     struct Download {
         BufferId buffer_id;
         BufferCopy copy;
     };
     std::vector<Download> downloads;
     u64 total_size_bytes = 0;
-    for (const BufferId buffer_id : buffer_ids) {
+    for (const BufferRange& range : ranges) {
+        const BufferId buffer_id = range.buffer_id;
         Buffer& buffer = slot_buffers[buffer_id];
         const DAddr buffer_addr = buffer.CpuAddr();
         memory_tracker.ForEachDownloadRangeAndClear(
-            buffer_addr, buffer.SizeBytes(), [&](u64 device_addr_out, u64 range_size) {
+            range.begin, range.end - range.begin, [&](u64 device_addr_out, u64 range_size) {
                 gpu_modified_ranges.ForEachInRange(device_addr_out, range_size,
                                                    [&](DAddr start, DAddr end) {
                     downloads.push_back({buffer_id, BufferCopy{
