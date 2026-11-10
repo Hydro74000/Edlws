@@ -2323,6 +2323,9 @@ ImageViewId TextureCache<P>::CreateImageView(const TICEntry& raw_config) {
     }
     const TICEntry config = TextureViewHeader(raw_config, native);
     const ImageInfo info(config);
+    if (info.format == PixelFormat::Invalid) {
+        return NULL_IMAGE_VIEW_ID;
+    }
     if (info.type == ImageType::Buffer) {
         const ImageViewInfo view_info(config, 0);
         return slot_image_views.insert(runtime, info, view_info, config.Address());
@@ -3178,6 +3181,12 @@ ImageViewId TextureCache<P>::FindDepthBuffer() {
 
 template <class P>
 ImageViewId TextureCache<P>::FindRenderTargetView(const ImageInfo& info, GPUVAddr gpu_addr) {
+    // Garbage render target registers: no image to make of them.
+    if (info.format == PixelFormat::Invalid || info.size.width == 0 || info.size.height == 0 ||
+        info.size.depth == 0 || info.size.width > 65536 || info.size.height > 65536 ||
+        info.size.depth > 2048 || info.resources.layers <= 0 || info.resources.layers > 2048) {
+        return NULL_IMAGE_VIEW_ID;
+    }
     ImageId image_id{};
     bool delete_state = has_deleted_images;
     do {
