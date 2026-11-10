@@ -114,17 +114,30 @@ bool ProcessFile(const RomFSTraversalContext& ctx, u32 this_file_offset,
     return true;
 }
 
+// Each level adds at least two characters to a path, and Horizon paths hold 0x300 of them. A
+// deeper tree is corrupt, and the nested directories built for it would also run out of stack
+// when they are destroyed.
+constexpr size_t MaxDirectoryDepth = 0x300 / 2;
+
 // Returns false on a corrupt table. The offsets link the entries in chains, so a bad one can form
 // a cycle: walking more entries than the table has room for means there is one. A list of pending
 // directories replaces recursion, which such a table could also make run out of stack.
 bool ProcessDirectories(const RomFSTraversalContext& ctx,
                         const std::shared_ptr<VectorVfsDirectory>& root) {
+    struct Pending {
+        u32 offset;
+        std::shared_ptr<VectorVfsDirectory> parent;
+        size_t depth;
+    };
     size_t directories_left = ctx.directory_meta.size() / sizeof(DirectoryEntry);
     size_t files_left = ctx.file_meta.size() / sizeof(FileEntry);
-    std::vector<std::pair<u32, std::shared_ptr<VectorVfsDirectory>>> pending{{0, root}};
+    std::vector<Pending> pending{{0, root, 0}};
     while (!pending.empty()) {
-        auto [this_dir_offset, parent] = std::move(pending.back());
+        auto [this_dir_offset, parent, depth] = std::move(pending.back());
         pending.pop_back();
+        if (depth > MaxDirectoryDepth) {
+            return false;
+        }
         while (this_dir_offset != ROMFS_ENTRY_EMPTY) {
             auto entry = GetDirectoryEntry(ctx, this_dir_offset);
             if (!entry || directories_left == 0) {
@@ -139,7 +152,7 @@ bool ProcessDirectories(const RomFSTraversalContext& ctx,
             }
 
             if (entry->first.child_dir != ROMFS_ENTRY_EMPTY) {
-                pending.emplace_back(entry->first.child_dir, current);
+                pending.push_back({entry->first.child_dir, current, depth + 1});
             }
 
             parent->AddDirectory(current);
