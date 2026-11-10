@@ -159,14 +159,28 @@ public:
     /// A release that is not the mirror's landed at gpu_address (device_address). Runs under the
     /// release ledger's lock when the release was queued.
     void NoteDirectRelease(u64 device_address, u64 gpu_address) {
+        const u64 word = device_address & ~u64{3};
+        if (IsDirect(word)) {
+            if (has_words.load(std::memory_order_acquire)) {
+                std::scoped_lock lock{mutex};
+                words.erase(word);
+            }
+            return;
+        }
         if (!Nx2InSemaphoreFirstPage(gpu_address)) {
             return;
         }
-        const u64 word = device_address & ~u64{3};
         std::scoped_lock lock{mutex};
-        if (direct_words.size() < MaxDirectWords) {
-            direct_words.insert(word);
-            has_direct.store(true, std::memory_order_release);
+        if (direct_words.size() < MaxDirectWords && direct_words.insert(word).second) {
+            // Published after the set has it: a lock-free IsDirect that sees the slot finds the
+            // word under the lock too.
+            if (const size_t count = fast_count.load(std::memory_order_relaxed);
+                count < FastWords) {
+                fast_words[count].store(word + 1, std::memory_order_relaxed);
+                fast_count.store(count + 1, std::memory_order_release);
+            } else {
+                overflow.store(true, std::memory_order_release);
+            }
         }
         words.erase(word);
     }
@@ -189,11 +203,7 @@ public:
 
     /// Whether a mirrored release into this word goes to the table instead of guest memory.
     [[nodiscard]] bool Diverts(u64 device_address) const {
-        if (!has_direct.load(std::memory_order_acquire)) {
-            return false;
-        }
-        std::scoped_lock lock{mutex};
-        return direct_words.contains(device_address & ~u64{3});
+        return IsDirect(device_address & ~u64{3});
     }
 
     /// guest: what guest memory holds at the word now.
@@ -206,7 +216,9 @@ public:
     /// The mirrored value of a word whose guest memory holds `guest`, or none. Once the guest word
     /// changed (a direct release or a CPU write), it is newer than the mirrored value.
     [[nodiscard]] std::optional<u32> Read(u64 device_address, u32 guest) {
-        if (!has_words.load(std::memory_order_acquire)) {
+        // Only words with direct releases ever get a mirrored value here: every other acquire's
+        // read (most of them, about 85,000 polls a second in Mario Kart World) stays lock-free.
+        if (!has_words.load(std::memory_order_acquire) || !IsDirect(device_address & ~u64{3})) {
             return std::nullopt;
         }
         std::scoped_lock lock{mutex};
@@ -225,7 +237,8 @@ public:
         std::scoped_lock lock{mutex};
         direct_words.clear();
         words.clear();
-        has_direct.store(false, std::memory_order_release);
+        fast_count.store(0, std::memory_order_release);
+        overflow.store(false, std::memory_order_release);
         has_words.store(false, std::memory_order_release);
     }
 
@@ -235,9 +248,29 @@ private:
         u32 guest;
     };
     static constexpr size_t MaxDirectWords = 1024;
+    /// Games have a few such words (3 to 17 in Mario Kart World, Bananza, Pokopia and Ocarina of
+    /// Time): the first ones are found without the lock.
+    static constexpr size_t FastWords = 64;
+
+    /// Whether the word got a direct release. Lock-free unless more than FastWords did.
+    [[nodiscard]] bool IsDirect(u64 word) const {
+        const size_t count = fast_count.load(std::memory_order_acquire);
+        for (size_t index = 0; index < count; ++index) {
+            if (fast_words[index].load(std::memory_order_relaxed) == word + 1) {
+                return true;
+            }
+        }
+        if (!overflow.load(std::memory_order_acquire)) {
+            return false;
+        }
+        std::scoped_lock lock{mutex};
+        return direct_words.contains(word);
+    }
 
     mutable std::mutex mutex;
-    std::atomic<bool> has_direct{};
+    std::array<std::atomic<u64>, FastWords> fast_words{}; ///< Word addresses plus one
+    std::atomic<size_t> fast_count{};
+    std::atomic<bool> overflow{};
     std::atomic<bool> has_words{};
     std::unordered_set<u64> direct_words;
     std::unordered_map<u64, Word> words;
