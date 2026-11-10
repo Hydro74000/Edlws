@@ -52,6 +52,7 @@ add_executable(tests
     video_core/native_qmd.cpp
     video_core/framebuffer_limits.cpp
     video_core/nx2_semaphore_ledger.cpp
+    video_core/nx2_semaphore_mirror.cpp
     video_core/uniform_stream_reuse.cpp
     video_core/usage_tracker.cpp
     video_core/shader_invalidation.cpp
