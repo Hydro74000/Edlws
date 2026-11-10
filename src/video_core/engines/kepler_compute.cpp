@@ -95,6 +95,9 @@ void KeplerCompute::ConsumeSinkImpl(Core::System& system) {
 void KeplerCompute::ProcessNativeReportSemaphore(u32 argument) {
     const GPUVAddr address = (GPUVAddr{native_registers[0x6c0] & 0x1ffffff} << 32) |
                              native_registers[0x6c1];
+    if (address == 0) {
+        return; // Nothing set up yet: no release to queue in the ledger or to write
+    }
     const u32 payload = native_registers[0x6c2];
     const u32 operation = argument & 3;
     const bool one_word = (argument >> 28) & 1;
