@@ -133,6 +133,8 @@ private:
     bool ParseMeta(PackageInfo& package);
     bool ValidateDirTree() const;
     void BuildDirTree(u32 dir_index, VectorVfsDirectory& out);
+    /// Whether the member's first bytes are a zstd frame header, or none when they can't be read.
+    std::optional<bool> HasZstdMagic(std::size_t file_index) const;
     VirtualDir BuildPackageDir(u32 dir_index);
     std::vector<u8> ReadExtentRaw(const FileNode& node) const;
 

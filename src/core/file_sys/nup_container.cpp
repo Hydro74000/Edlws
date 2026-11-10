@@ -894,13 +894,66 @@ VirtualFile NupContainer::OpenFile(std::size_t file_index) {
                                         node.name, cache, file_index);
 }
 
+std::optional<bool> NupContainer::HasZstdMagic(std::size_t file_index) const {
+    constexpr std::array<u8, 4> ZstdMagic{0x28, 0xB5, 0x2F, 0xFD};
+    const FileNode& node = files[file_index];
+    if (node.size < ZstdMagic.size()) {
+        return false;
+    }
+    std::array<u8, 4> head{};
+    if (node.codec == CodecRaw) {
+        if (file->Read(head.data(), head.size(), static_cast<std::size_t>(node.extent_offset)) !=
+            head.size()) {
+            return std::nullopt;
+        }
+        return head == ZstdMagic;
+    }
+    // The first block decodes the first bytes, and a block takes at most 128 KiB plus headers.
+    const std::size_t compressed_size =
+        static_cast<std::size_t>(std::min<u64>(node.extent_size, 132 * 1024));
+    const auto compressed =
+        file->ReadBytes(compressed_size, static_cast<std::size_t>(node.extent_offset));
+    std::unique_ptr<ZSTD_DCtx, decltype(&ZSTD_freeDCtx)> dctx{ZSTD_createDCtx(), &ZSTD_freeDCtx};
+    if (compressed.size() != compressed_size || !dctx) {
+        return std::nullopt;
+    }
+    ZSTD_DCtx_setParameter(dctx.get(), ZSTD_d_windowLogMax, ZSTD_WINDOWLOG_MAX);
+    ZSTD_inBuffer input{compressed.data(), compressed.size(), 0};
+    ZSTD_outBuffer output{head.data(), head.size(), 0};
+    while (output.pos < output.size && input.pos < input.size) {
+        if (ZSTD_isError(ZSTD_decompressStream(dctx.get(), &output, &input))) {
+            return std::nullopt;
+        }
+    }
+    if (output.pos < output.size) {
+        return std::nullopt;
+    }
+    return head == ZstdMagic;
+}
+
 void NupContainer::BuildDirTree(u32 dir_index, VectorVfsDirectory& out) {
     const DirNode& node = dirs[dir_index];
     const u64 end = static_cast<u64>(node.first_child) + node.child_count;
     for (u64 slot = node.first_child; slot < end; ++slot) {
         const u32 child = children[slot];
         if (child >= dirs.size()) {
-            out.AddFile(OpenFile(child - static_cast<u32>(dirs.size())));
+            // A game .zs is already compressed, so the NUP only recompresses one that shrinks,
+            // which a zeroed range does. Such a member without its zstd header is damaged: the
+            // game gives up on what uses it (rooms of Ocarina of Time left invisible). It is
+            // served as stored; the dump has to be made again.
+            const std::size_t index = child - static_cast<u32>(dirs.size());
+            if (const FileNode& member = files[index];
+                member.codec == CodecZstd && member.name.ends_with(".zs") &&
+                HasZstdMagic(index) == false) {
+                static std::atomic<u32> warned{};
+                if (warned.fetch_add(1, std::memory_order_relaxed) < 16) {
+                    LOG_WARNING(Loader,
+                                "NUP member {} is damaged (no zstd header where the game expects "
+                                "one): the dump is incomplete and has to be made again",
+                                member.name);
+                }
+            }
+            out.AddFile(OpenFile(index));
         } else {
             auto sub = std::make_shared<VectorVfsDirectory>(std::vector<VirtualFile>{},
                                                             std::vector<VirtualDir>{},
