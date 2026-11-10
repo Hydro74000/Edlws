@@ -108,6 +108,7 @@ struct SynchState final {
     u64 last_fence{};
     std::atomic<u64> signaled_fence{};
     std::atomic<bool> front_idle{};
+    std::atomic<u64> front_progress{};
     std::condition_variable_any cv;
 };
 
@@ -143,6 +144,12 @@ public:
     /// Any thread: whether the GPU thread has nothing to run right now.
     [[nodiscard]] bool FrontIdle() const {
         return state.front_idle.load(std::memory_order_acquire);
+    }
+
+    /// Any thread: counts the commands the GPU thread took and the times a suspended channel
+    /// moved. FrontIdle stays set while it resumes channels that suspend again.
+    [[nodiscard]] u64 FrontProgress() const {
+        return state.front_progress.load(std::memory_order_acquire);
     }
 
 private:

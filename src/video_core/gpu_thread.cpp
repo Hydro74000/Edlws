@@ -73,6 +73,7 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
                 }
                 if (resumed) {
                     last_progress = std::chrono::steady_clock::now();
+                    state.front_progress.fetch_add(1, std::memory_order_release);
                 }
                 if (!state.queue.TryPop(next)) {
                     if (!scheduler.HasPendingChannels()) {
@@ -97,6 +98,7 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
                 state.queue.PopWait(next, stop_token);
             }
             state.front_idle.store(false, std::memory_order_release);
+            state.front_progress.fetch_add(1, std::memory_order_release);
             if (stop_token.stop_requested()) {
                 break;
             }

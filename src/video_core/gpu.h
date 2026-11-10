@@ -223,9 +223,13 @@ public:
     /// Whether a channel is suspended on a semaphore acquire (callable from any thread).
     [[nodiscard]] bool HasSuspendedChannels() const;
 
-    /// Whether nothing can move on the GPU until the CPU acts: no command to run, on neither
-    /// thread, and nothing left on the host GPU.
-    [[nodiscard]] bool WaitsOnCpu() const;
+    /// Whether nothing can move on the GPU until the CPU acts: no command to run on either
+    /// thread and no semaphore release waiting for its fence; with `host_too`, nothing left on
+    /// the host GPU either. Callable from any thread.
+    [[nodiscard]] bool WaitsOnCpu(bool host_too) const;
+
+    /// See ThreadManager::FrontProgress (callable from any thread).
+    [[nodiscard]] u64 FrontProgress() const;
 
     [[nodiscard]] bool UseNvdec() const;
 

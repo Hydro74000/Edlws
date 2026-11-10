@@ -1750,9 +1750,9 @@ private:
         // Wait for this frame's fence, so the game doesn't write the next frame's data (constant
         // buffers holding texture handles, vertex data, Pokopia's glyph atlas) while the GPU
         // thread still reads this frame's. But title 1's GPU waits on semaphores its CPU releases
-        // only after this present returns: while a channel stays suspended on one, wait for the
-        // previous frame's fence instead and let the game prepare frame N+1 meanwhile (waiting
-        // for this frame there cost 8-56 ms of every 34-105 ms frame, or never finished).
+        // only after this present returns: once nothing on the GPU can move without the CPU, wait
+        // for the previous frame's fence instead and let the game prepare frame N+1 meanwhile
+        // (waiting for this frame there cost 8-56 ms of every 34-105 ms frame, or never finished).
         // EDEN_NX2_FRAMES_AHEAD=1 always waits for the previous frame, =0 always for this one.
         static const int frames_ahead_setting = [] {
             const char* value = std::getenv("EDEN_NX2_FRAMES_AHEAD");
@@ -1762,7 +1762,6 @@ private:
         const auto entered = std::chrono::steady_clock::now();
         NoteFrameTime(entered);
         ChooseFrameWait();
-        m_frame_patience = FramePatience();
         if (frames_ahead == 1 || (frames_ahead == -1 && !WaitForFrame(~w[22], w[24], true))) {
             LOG_DEBUG(Service, "nx2:vi2 present #{} fence ({}, {:#x}), waiting for ({}, {:#x}); now {:#x}",
                       m_presents, ~w[22], w[24], m_previous_fence_id, m_previous_fence_value,
@@ -1854,7 +1853,6 @@ private:
     std::chrono::microseconds m_last_frame{};
     std::chrono::microseconds m_smoothed_frame{};
     std::chrono::microseconds m_target_frame{};
-    std::chrono::microseconds m_frame_patience{3'000};
 
     // See ChooseFrameWait.
     enum class FrameTrial : u8 { Pause, Ahead, Waiting };
@@ -1942,7 +1940,7 @@ private:
     }
 
     // Waiting for its frame at each present keeps the game from writing over what the GPU hasn't
-    // read yet (see FramePatience), but stops the CPU and the GPU from overlapping: a Vega's race
+    // read yet (see WaitForFrame), but stops the CPU and the GPU from overlapping: a Vega's race
     // takes 47 ms a frame either way, a GTX 1070's goes from 26 to 36 ms. How late frames are
     // doesn't tell which, and a game limited by the CPU would mislead it, so time both on the
     // game itself: the median frame over a few presents each way, then wait unless that is more
@@ -2004,36 +2002,17 @@ private:
         m_frame_trial = FrameTrial::Pause;
     }
 
-    // How long a present keeps waiting for its frame with a channel suspended. Title 1's GPU can
-    // wait on semaphores its CPU releases after the present returns, so this can't be for good:
-    // past this, the game starts the next frame and writes over the texture handles of the HUD
-    // the GPU thread hasn't read yet (other textures in its sprites for a frame). On a machine
-    // keeping up, the wait only costs speed (a GTX 1070 lost 13% to 8 ms). On one far behind the
-    // pace the game asks for, the GPU is the limit and it costs little: this grows with the
-    // square of how late frames are, from nothing on time to nearly all of the delay.
-    // EDEN_NX2_FRAME_PATIENCE_PERCENT scales it. Presents that wait for their frame
-    // (ChooseFrameWait) stop once the GPU can't move: this then only bounds a GPU that stays busy.
-    std::chrono::microseconds FramePatience() const {
-        constexpr std::chrono::microseconds Least{3'000};
-        if (m_wait_for_frame) {
-            return std::clamp(m_smoothed_frame * 4, std::chrono::microseconds{100'000},
-                              std::chrono::microseconds{500'000});
-        }
-        static const long percent = [] {
-            const char* value = std::getenv("EDEN_NX2_FRAME_PATIENCE_PERCENT");
-            return value != nullptr ? std::strtol(value, nullptr, 10) : 100L;
-        }();
-        const auto late = m_smoothed_frame - m_target_frame;
-        if (late.count() <= 0) {
-            return Least;
-        }
-        const auto patience = late * late.count() / m_smoothed_frame.count() * percent / 100;
-        return std::clamp(patience, Least, std::chrono::microseconds{33'000});
-    }
-
-    /// Waits until the fence is reached. With `unless_gpu_waits`, gives up after a few ms once a
-    /// GPU channel was seen suspended on a semaphore (it may be one this thread releases later).
-    /// Returns whether the fence was reached.
+    /// Waits until the fence is reached. With `unless_gpu_waits`, gives up once a GPU channel was
+    /// seen suspended on a semaphore (it may be one this thread releases later) and nothing on the
+    /// GPU can move without the CPU: no command to run on either GPU thread and no semaphore
+    /// release waiting for its fence, and with the frame waited for (ChooseFrameWait) nothing left
+    /// on the host GPU either. Returns whether the fence was reached.
+    ///
+    /// Giving up any sooner hands the game a frame the GPU is still running: past the present,
+    /// title 1 starts the next frame, writes over the HUD's texture handles the GPU hasn't read
+    /// yet (the HUD flashes) and zeroes the semaphore words of the round its channels 1 and 2 run
+    /// at the start of the frame; a round still running then waits for good. On the console that
+    /// round ends within microseconds of its submission.
     bool WaitForFrame(u32 fence_id, u32 fence_value, bool unless_gpu_waits = false) {
         if (fence_id >= 192) {
             return true;
@@ -2064,17 +2043,21 @@ private:
             // Title 1's channels resume and suspend again while they wait on this thread, so any
             // suspension counts, not only an unbroken one.
             bool gpu_waited = false;
-            // Twice in a row: the last fence may be on its way from the host GPU.
+            // Over 2 ms with the GPU thread not moving: it polls its suspended channels every
+            // millisecond, and the last fence may be on its way from the host GPU.
             u32 stalled = 0;
+            u64 front_progress = system.GPU().FrontProgress();
             while (!wake->done && system.IsPoweredOn() &&
                    std::chrono::steady_clock::now() < deadline) {
                 if (unless_gpu_waits) {
                     gpu_waited |= system.GPU().HasSuspendedChannels();
-                    stalled = m_wait_for_frame && gpu_waited && system.GPU().WaitsOnCpu()
+                    const u64 progress = system.GPU().FrontProgress();
+                    stalled = gpu_waited && progress == front_progress &&
+                                      system.GPU().WaitsOnCpu(m_wait_for_frame)
                                   ? stalled + 1
                                   : 0;
-                    if (stalled == 2 || (gpu_waited && std::chrono::steady_clock::now() - start >
-                                                           m_frame_patience)) {
+                    front_progress = progress;
+                    if (stalled == 3) {
                         return false;
                     }
                 }

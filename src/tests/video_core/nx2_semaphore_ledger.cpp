@@ -58,6 +58,19 @@ TEST_CASE("Nx2SemaphoreLedger: a dropped release leaves the word", "[video_core]
           Ledger::Outcome::NothingQueued);
 }
 
+TEST_CASE("Nx2SemaphoreLedger: empty once every queued release ran", "[video_core][nx2]") {
+    auto& ledger = Ledger::Get();
+    constexpr u64 address = Base + 0x40;
+    REQUIRE(ledger.Empty());
+    ledger.Queue(address, Ledger::Op::Write, 1);
+    ledger.Queue(address + 4, Ledger::Op::Write, 2);
+    CHECK(!ledger.Empty());
+    ledger.Apply(address, [] {});
+    CHECK(!ledger.Empty());
+    ledger.Drop(address + 4);
+    CHECK(ledger.Empty());
+}
+
 TEST_CASE("Nx2SemaphoreLedger: the reductions match the semaphore encodings", "[video_core][nx2]") {
     CHECK(Ledger::Reduce(Ledger::Op::Add, 5, 3) == 8);
     CHECK(Ledger::Reduce(Ledger::Op::Min, 5, 3) == 3);

@@ -432,6 +432,11 @@ public:
         Retire(device_address);
     }
 
+    /// Whether every queued release ran (any thread).
+    [[nodiscard]] bool Empty() const {
+        return count.load(std::memory_order_acquire) == 0;
+    }
+
     /// Whether the releases queued for the word, applied in order to what `read` returns, meet
     /// `meets` at any point. The word is read outside the lock, which a write may take; a release
     /// that runs meanwhile makes it read again.
