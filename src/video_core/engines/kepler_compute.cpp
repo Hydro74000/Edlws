@@ -719,12 +719,22 @@ bool KeplerCompute::EmulatesNativeTensorPrograms() const {
         return dlss_chain.failure == VideoCore::GameDlssReason::None &&
                GameDlssBlocker() == VideoCore::GameDlssReason::None;
     }
-    // Donkey Kong Bananza's programs are emulated: rejected, they write nothing and the screen is
-    // purple from its mode select on. Other titles keep the upscale stand-in (emulating title 4's
-    // network takes the host driver minutes to compile). Chosen per title, not per dispatch: the
-    // shader cache keeps the result of a program's first dispatch.
+    // Matrix multiplies are emulated wherever the compact form runs. A rejected program is
+    // replaced by a plain upscale of its input, which only suits an upscaler: Ocarina of Time's
+    // end-of-frame network (11 programs after the tonemap) then left the frame flat and far too
+    // bright (Kokiri Forest median luma ~0.29 against ~0.10 with the network). Donkey Kong
+    // Bananza's programs are emulated in any case, in the expansion where the compact form cannot
+    // run: rejected, they write nothing and the screen is purple from its mode select on. Decided
+    // at a program's first dispatch: the shader cache keeps the result.
     constexpr u64 DonkeyKongBananzaProgramId = 0x040074A01BF12000ULL;
-    return Settings::GetCurrentProgramID() == DonkeyKongBananzaProgramId;
+    return UsesCompactTensorPrograms() ||
+           Settings::GetCurrentProgramID() == DonkeyKongBananzaProgramId;
+}
+
+bool KeplerCompute::UsesCompactTensorPrograms() const {
+    // One call of a shared helper per HMMA instead of the expansion. The helper shuffles across
+    // 32 lanes, so it needs compute shaders created 32 threads wide.
+    return rasterizer->SupportsGameDlssNetwork();
 }
 
 // Checks the network's output against its input (on the GPU; the result arrives a few frames
