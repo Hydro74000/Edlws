@@ -106,8 +106,10 @@ public:
         fragment_barrier_pending = state.renderpass != VK_NULL_HANDLE;
     }
 
-    bool TakeFragmentBarrier() {
-        return std::exchange(fragment_barrier_pending, false);
+    /// Pending until the render pass ends (EndRenderPass), so a draw that cannot see what the
+    /// render pass wrote leaves it to a later one that can.
+    bool HasFragmentBarrier() const {
+        return fragment_barrier_pending;
     }
 
     void NoteRenderPassStores() {

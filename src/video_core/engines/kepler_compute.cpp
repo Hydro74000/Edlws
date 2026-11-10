@@ -128,6 +128,8 @@ void KeplerCompute::ProcessNativeReportSemaphore(u32 argument) {
                 if (device) {
                     Tegra::Nx2MirrorShadow::Get().NoteCombinedRelease(*device, address, guest,
                                                                       stored, combine);
+                    // An acquire this value meets latches now: a later write may change it.
+                    Tegra::Nx2SemaphoreWaiters::Get().OnWrite(*device, stored);
                 }
             };
             if (device) {
@@ -511,6 +513,9 @@ bool KeplerCompute::ProcessNativeMethod(Core::System& system, u32 method, u32 ar
 }
 
 void KeplerCompute::CallMethod(Core::System& system, u32 method, u32 method_argument, bool is_last_call) {
+    if (front_macros && !VideoCommon::GpuSplit::Get().Active()) [[unlikely]] {
+        ReleaseFront();
+    }
     if (native_mode) {
         // Most of the compute class's register writes (QMD fields replayed by its macros for
         // each of thousands of dispatches a second) only store the value: ~4% of title 1's GPU
@@ -1208,6 +1213,18 @@ KeplerCompute::FrontState& KeplerCompute::Front(VideoCommon::GpuSplit& split) {
         front_macros = true;
     }
     return *front;
+}
+
+// As Maxwell3D::ReleaseFront: the split stopped, the engine runs its macros again.
+void KeplerCompute::ReleaseFront() {
+    native_executing_macro = front->executing_macro;
+    native_parameters = std::move(front->parameters);
+    native_compute_uploaded = front->compute_uploaded;
+    native_bind_pointer = front->bind_pointer;
+    native_macro = front->macro;
+    front.reset();
+    front_macros = false;
+    LOG_INFO(HW_GPU, "GPU thread split stopped: compute macros back on the engine");
 }
 
 void KeplerCompute::FrontApply(FrontState& fs, u32 method, u32 argument) {
