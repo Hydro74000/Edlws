@@ -192,6 +192,22 @@ bool GenericEnvironment::IsCbufStorageBufferPointer(u32 index, u32 offset) {
     return mapped;
 }
 
+std::vector<u64> GenericEnvironment::MappedStoragePointerKeys() const {
+    std::vector<u64> keys;
+    for (const auto& [key, type] : storage_pointer_types) {
+        if (type != 0) {
+            keys.push_back(key);
+        }
+    }
+    return keys;
+}
+
+void GenericEnvironment::KeepStoragePointers(std::span<const u64> keys) {
+    for (const u64 key : keys) {
+        storage_pointer_types.insert_or_assign(key, u8{1});
+    }
+}
+
 std::optional<u64> GenericEnvironment::Analyze() {
     if (native_source_size) {
         // Include the converted header and a version tag to isolate this experimental ABI.

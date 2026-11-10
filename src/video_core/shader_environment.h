@@ -73,6 +73,16 @@ public:
 
     void SetCachedSize(size_t size_bytes);
 
+    /// The constant buffer slots (MakeCbufKey) this program's translation took as storage buffer
+    /// pointers.
+    [[nodiscard]] std::vector<u64> MappedStoragePointerKeys() const;
+
+    /// Takes these slots as storage buffer pointers whatever they hold when the program is
+    /// translated again. A slot classified by its contents at that moment, null or unmapped
+    /// around an area load, would lose its buffer: the shader would read zeros through it for
+    /// the rest of the session.
+    void KeepStoragePointers(std::span<const u64> keys);
+
     [[nodiscard]] size_t CachedSizeWords() const noexcept;
 
     [[nodiscard]] size_t CachedSizeBytes() const noexcept;

@@ -1676,10 +1676,14 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline() {
     };
     GraphicsEnvironments environments;
     GetGraphicsEnvironments(environments, graphics_key.unique_hashes);
+    KeepStoragePointers(environments);
 
     main_pools.ReleaseContents();
     auto pipeline{
         CreateGraphicsPipeline(main_pools, graphics_key, environments.Span(), nullptr, true)};
+    if (pipeline) {
+        RememberStoragePointers(graphics_key, environments.envs);
+    }
     if (!pipeline || pipeline_cache_filename.empty()) {
         return pipeline;
     }
@@ -1694,11 +1698,13 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipelineFromReuse
     const auto begin = std::chrono::steady_clock::now();
     GraphicsEnvironments environments;
     GetGraphicsEnvironments(environments, graphics_key.unique_hashes);
+    KeepStoragePointers(environments);
     auto pipeline{CreateGraphicsPipeline(main_pools, graphics_key, environments.Span(), nullptr,
                                          true, false)};
     if (!pipeline) {
         return nullptr;
     }
+    RememberStoragePointers(graphics_key, environments.envs);
     ReportRuntimePipeline("Graphics (reused shaders)", begin);
     if (!pipeline_cache_filename.empty()) {
         StoreGraphicsPipeline(graphics_key, *pipeline, std::move(environments.envs));
@@ -1768,10 +1774,38 @@ bool PipelineCache::CanTranslateAsynchronously() const {
     return true;
 }
 
+void PipelineCache::KeepStoragePointers(GraphicsEnvironments& environments) const {
+    const auto it = storage_pointer_slots.find(graphics_key.Hash());
+    if (it == storage_pointer_slots.end()) {
+        return;
+    }
+    for (size_t index = 0; index < Maxwell::MaxShaderProgram; ++index) {
+        if (graphics_key.unique_hashes[index] != 0) {
+            environments.envs[index].KeepStoragePointers(it->second[index]);
+        }
+    }
+}
+
+void PipelineCache::RememberStoragePointers(const GraphicsPipelineCacheKey& key,
+                                            const GraphicsEnvironmentArray& envs) {
+    std::array<std::vector<u64>, Maxwell::MaxShaderProgram> slots;
+    bool any = false;
+    for (size_t index = 0; index < Maxwell::MaxShaderProgram; ++index) {
+        if (key.unique_hashes[index] != 0) {
+            slots[index] = envs[index].MappedStoragePointerKeys();
+            any |= !slots[index].empty();
+        }
+    }
+    if (any) {
+        storage_pointer_slots.insert_or_assign(key.Hash(), std::move(slots));
+    }
+}
+
 std::optional<std::future<void>> PipelineCache::QueueGraphicsTranslation() {
     const auto begin = std::chrono::steady_clock::now();
     GraphicsEnvironments environments;
     GetGraphicsEnvironments(environments, graphics_key.unique_hashes);
+    KeepStoragePointers(environments);
 
     size_t snapshot_bytes{};
     for (size_t index = 0; index < Maxwell::MaxShaderProgram; ++index) {
@@ -1860,6 +1894,9 @@ void PipelineCache::AdoptTranslatedGraphicsPipelines() {
         translating_graphics.erase(result.key);
         GetTranslationReport().Adopted(result.build_time);
         // What CreateGraphicsPipeline() does after building on the GPU thread.
+        if (result.pipeline) {
+            RememberStoragePointers(result.key, result.envs);
+        }
         if (result.pipeline && !pipeline_cache_filename.empty()) {
             StoreGraphicsPipeline(result.key, *result.pipeline, std::move(result.envs));
         }
