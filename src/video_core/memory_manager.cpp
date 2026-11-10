@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <array>
 
 #include "common/alignment.h"
 #include "common/assert.h"
@@ -268,6 +269,26 @@ std::optional<DAddr> MemoryManager::GpuToCpuAddress(GPUVAddr gpu_addr) const {
     if (!IsWithinGPUAddressRange(gpu_addr)) [[unlikely]] {
         return std::nullopt;
     }
+    // The same few pages are looked up over and over (every draw rebinds its buffers and
+    // textures): a small per-thread cache of 4 KiB page translations, tagged with the manager and
+    // its map serial, which moves after every Map, MapSparse and Unmap.
+    struct CachedPage {
+        u64 owner;
+        u64 serial;
+        u64 page;
+        DAddr device_page;
+    };
+    static constexpr size_t CacheSize = 2048;
+    static thread_local std::array<CachedPage, CacheSize> cache{};
+    constexpr u64 SubpageBits = 12;
+    constexpr u64 SubpageMask = (u64{1} << SubpageBits) - 1;
+    const u64 owner = (u64{unique_identifier} << 1) | 1; // Never 0, the empty slot
+    const u64 page = gpu_addr >> SubpageBits;
+    const u64 serial = map_serial.load(std::memory_order_acquire);
+    CachedPage& slot = cache[(page ^ (page >> 11)) % CacheSize];
+    if (slot.owner == owner && slot.page == page && slot.serial == serial) [[likely]] {
+        return slot.device_page + (gpu_addr & SubpageMask);
+    }
     DAddr dev_addr;
     if (GetEntry(gpu_addr, true) != EntryType::Mapped) [[unlikely]] {
         if (GetEntry(gpu_addr, false) != EntryType::Mapped)
@@ -284,6 +305,7 @@ std::optional<DAddr> MemoryManager::GpuToCpuAddress(GPUVAddr gpu_addr) const {
                   dev_addr);
         return std::nullopt;
     }
+    slot = CachedPage{owner, serial, page, dev_addr - (gpu_addr & SubpageMask)};
     return dev_addr;
 }
 
