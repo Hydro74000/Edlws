@@ -171,6 +171,13 @@ private:
     // Asynchronous translation of native graphics pipelines.
     using GraphicsEnvironmentArray = std::array<GraphicsEnvironment, Maxwell::MaxShaderProgram>;
 
+    /// Has the environments of graphics_key keep the storage buffer pointers an earlier build of
+    /// the same pipeline took (GenericEnvironment::KeepStoragePointers), and records the ones a
+    /// build took, by pipeline key hash.
+    void KeepStoragePointers(GraphicsEnvironments& environments) const;
+    void RememberStoragePointers(const GraphicsPipelineCacheKey& key,
+                                 const GraphicsEnvironmentArray& envs);
+
     /// A graphics pipeline translated on a worker thread, waiting for the GPU thread.
     struct TranslatedGraphicsPipeline {
         GraphicsPipelineCacheKey key;
@@ -310,6 +317,11 @@ private:
     ::Common::unordered_set<GraphicsPipelineCacheKey> translating_graphics;
     /// Finished translations, handed from the workers to the GPU thread.
     std::mutex translated_mutex;
+
+    /// Per graphics pipeline key hash, per program, the constant buffer slots its last build took
+    /// as storage buffer pointers (GPU thread only).
+    std::unordered_map<u64, std::array<std::vector<u64>, Maxwell::MaxShaderProgram>>
+        storage_pointer_slots;
     std::vector<TranslatedGraphicsPipeline> translated_graphics;
     std::atomic<size_t> num_translated{};
     /// Declared last so it is destroyed first: its threads finish the translation they are
