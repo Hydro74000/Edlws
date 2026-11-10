@@ -611,6 +611,7 @@ private:
     DAddr virtual_invalid_space{};
 
     /// Applies EDEN_NX2_TC_EXPECTED_MIB / EDEN_NX2_TC_CRITICAL_MIB and logs the thresholds.
+    void LogThresholds() const;
     void ApplyThresholdOverrides(bool log = true);
 
     /// The CPU address an image at gpu_addr is keyed by: its backing, or a fixed stand-in.
