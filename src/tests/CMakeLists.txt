@@ -24,6 +24,7 @@ add_executable(tests
     common/unique_function.cpp
     common/zstd_compression.cpp
     core/core_timing.cpp
+    core/nup_zstd_read.cpp
     core/ldn.cpp
     core/malformed_containers.cpp
     core/memory_range.cpp
