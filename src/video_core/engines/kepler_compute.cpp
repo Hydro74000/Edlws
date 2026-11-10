@@ -116,9 +116,16 @@ void KeplerCompute::ProcessNativeReportSemaphore(u32 argument) {
         }
         rasterizer->SignalFence([this, address, payload, op, device] {
             const auto write = [&] {
-                const u32 old_value = memory_manager.Read<u32>(address);
-                memory_manager.Write<u32>(address,
-                                          Tegra::Nx2SemaphoreLedger::Reduce(op, old_value, payload));
+                const auto combine = [&](u32 current) {
+                    return Tegra::Nx2SemaphoreLedger::Reduce(op, current, payload);
+                };
+                const u32 guest = memory_manager.Read<u32>(address);
+                const u32 stored = combine(guest);
+                memory_manager.Write<u32>(address, stored);
+                if (device) {
+                    Tegra::Nx2MirrorShadow::Get().NoteCombinedRelease(*device, address, guest,
+                                                                      stored, combine);
+                }
             };
             if (device) {
                 Tegra::Nx2SemaphoreLedger::Get().Apply(*device, write);
@@ -386,9 +393,16 @@ bool KeplerCompute::ProcessNativeMethod(Core::System& system, u32 method, u32 ar
                     rasterizer->SignalFence([this, address, payload, op, queued] {
                         u32 value{};
                         const auto write = [&] {
-                            value = Tegra::Nx2SemaphoreLedger::Reduce(
-                                op, memory_manager.Read<u32>(address), payload);
+                            const auto combine = [&](u32 current) {
+                                return Tegra::Nx2SemaphoreLedger::Reduce(op, current, payload);
+                            };
+                            const u32 guest = memory_manager.Read<u32>(address);
+                            value = combine(guest);
                             memory_manager.Write<u32>(address, value);
+                            if (queued) {
+                                value = Tegra::Nx2MirrorShadow::Get().NoteCombinedRelease(
+                                    *queued, address, guest, value, combine);
+                            }
                         };
                         if (queued) {
                             Tegra::Nx2SemaphoreLedger::Get().Apply(*queued, write);
@@ -424,8 +438,16 @@ bool KeplerCompute::ProcessNativeMethod(Core::System& system, u32 method, u32 ar
                     rasterizer->SignalFence([this, address, payload, queued] {
                         u32 value{};
                         const auto write = [&] {
-                            value = (std::max)(memory_manager.Read<u32>(address), payload);
+                            const auto combine = [&](u32 current) {
+                                return (std::max)(current, payload);
+                            };
+                            const u32 guest = memory_manager.Read<u32>(address);
+                            value = combine(guest);
                             memory_manager.Write<u32>(address, value);
+                            if (queued) {
+                                value = Tegra::Nx2MirrorShadow::Get().NoteCombinedRelease(
+                                    *queued, address, guest, value, combine);
+                            }
                         };
                         if (queued) {
                             Tegra::Nx2SemaphoreLedger::Get().Apply(*queued, write);
