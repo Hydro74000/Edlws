@@ -8,6 +8,8 @@ add_executable(tests
     audio_core/adpcm_decode.cpp
     video_core/shader_object_pool.cpp
     video_core/join_whole_copy.cpp
+    core/file_sys_parsers.cpp
+    core/vfs_vector.cpp
     common/bit_field.cpp
     common/bit_util.cpp
     common/cityhash.cpp
