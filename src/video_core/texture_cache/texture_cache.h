@@ -3867,6 +3867,11 @@ void TextureCache<P>::PrepareImageView(ImageViewId image_view_id, bool is_modifi
     if (!image_view_id) {
         return;
     }
+    // The null image has nothing to upload and no valid format (a texture memo hit with a null
+    // texture reached BitsPerBlock's UNREACHABLE).
+    if (image_view_id == NULL_IMAGE_VIEW_ID) {
+        return;
+    }
     const ImageViewBase& image_view = slot_image_views[image_view_id];
     if (image_view.IsBuffer()) {
         return;
