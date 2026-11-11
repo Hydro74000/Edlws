@@ -271,9 +271,28 @@ public:
 
     bool InlineMemory(DAddr dest_address, size_t copy_size, std::span<const u8> inlined_buffer);
 
-    void BindGraphicsUniformBuffer(size_t stage, u32 index, GPUVAddr gpu_addr, u32 size);
+    void BindGraphicsUniformBuffer(size_t stage, u32 index, GPUVAddr gpu_addr, u32 size) {
+        const std::optional<DAddr> device_addr = gpu_memory->GpuToCpuAddress(gpu_addr);
+        if (!device_addr) {
+            channel_state->uniform_buffers[stage][index] = NULL_BINDING;
+            return;
+        }
+        const Binding binding{
+            .device_addr = *device_addr,
+            .size = size,
+            .buffer_id = BufferId{},
+        };
+        channel_state->uniform_buffers[stage][index] = binding;
+    }
 
-    void DisableGraphicsUniformBuffer(size_t stage, u32 index);
+    void DisableGraphicsUniformBuffer(size_t stage, u32 index) {
+        auto& current = channel_state->uniform_buffers[stage][index];
+        if (current.device_addr == 0 && current.size == 0 && current.buffer_id == NULL_BUFFER_ID)
+            [[likely]] {
+            return;
+        }
+        current = NULL_BINDING;
+    }
 
     void UpdateGraphicsBuffers(bool is_indexed);
 
@@ -286,16 +305,49 @@ public:
     void BindHostComputeBuffers();
 
     void SetUniformBuffersState(const std::array<u32, NUM_STAGES>& mask,
-                                const UniformBufferSizes* sizes);
+                                const UniformBufferSizes* sizes) {
+        if (channel_state->enabled_uniform_buffer_masks == mask &&
+            channel_state->uniform_buffer_sizes == sizes) [[likely]] {
+            return;
+        }
+        if (channel_state->enabled_uniform_buffer_masks != mask) {
+            channel_state->fast_bound_uniform_buffers.fill(0);
+            if constexpr (HAS_PERSISTENT_UNIFORM_BUFFER_BINDINGS) {
+                channel_state->dirty_uniform_buffers.fill(~u32{0});
+                channel_state->uniform_buffer_binding_sizes.fill({});
+            }
+            channel_state->enabled_uniform_buffer_masks = mask;
+        }
+        channel_state->uniform_buffer_sizes = sizes;
+    }
 
     void SetComputeUniformBufferState(u32 mask, const ComputeUniformBufferSizes* sizes);
 
-    void UnbindGraphicsStorageBuffers(size_t stage);
+    void UnbindGraphicsStorageBuffers(size_t stage) {
+        if (channel_state->enabled_storage_buffers[stage] == 0) {
+            return;
+        }
+        if constexpr (requires { runtime.ShouldLimitDynamicStorageBuffers(); }) {
+            if (runtime.ShouldLimitDynamicStorageBuffers()) {
+                channel_state->total_graphics_storage_buffers -=
+                    static_cast<u32>(std::popcount(channel_state->enabled_storage_buffers[stage]));
+            }
+        }
+        channel_state->enabled_storage_buffers[stage] = 0;
+        channel_state->written_storage_buffers[stage] = 0;
+    }
 
     bool BindGraphicsStorageBuffer(size_t stage, size_t ssbo_index, u32 cbuf_index, u32 cbuf_offset,
                                    bool is_written, u32 indirect_offset = ~0U);
 
-    void UnbindGraphicsTextureBuffers(size_t stage);
+    void UnbindGraphicsTextureBuffers(size_t stage) {
+        if (channel_state->enabled_texture_buffers[stage] == 0) {
+            return;
+        }
+        channel_state->enabled_texture_buffers[stage] = 0;
+        channel_state->written_texture_buffers[stage] = 0;
+        channel_state->image_texture_buffers[stage] = 0;
+    }
 
     void BindGraphicsTextureBuffer(size_t stage, size_t tbo_index, GPUVAddr gpu_addr, u32 size,
                                    PixelFormat format, bool is_written, bool is_image);

@@ -645,28 +645,33 @@ bool MemoryManager::IsMemoryDirty(GPUVAddr gpu_addr, size_t size,
 }
 
 size_t MemoryManager::MaxContinuousRange(GPUVAddr gpu_addr, size_t size) const {
-    // Storage buffer bindings of native pointers ask this for the same few addresses at every
-    // draw, and the walk visits up to 2048 pages: a small per-thread cache tagged with the manager
-    // and its map serial, as GpuToCpuAddress keeps (the answer depends on the page tables only).
-    struct CachedRange {
+    // Storage buffer bindings of native pointers ask this at every bind, for up to 8 MiB (2048
+    // pages): about 90,000 times a second in Ocarina of Time's Kokiri village, at as many
+    // addresses as there are objects, so answers kept per address missed. Inside a contiguous run,
+    // the run from any address ends where the run from its 4 KiB page does: keep that end per page,
+    // per thread and per manager, until the page tables change (map_serial).
+    struct Run {
         u64 owner;
         u64 serial;
-        GPUVAddr gpu_addr;
-        size_t size;
-        size_t result;
+        GPUVAddr page;
+        GPUVAddr end;
     };
-    static constexpr size_t RangeCacheSize = 256;
-    static thread_local std::array<CachedRange, RangeCacheSize> cache{};
+    // How far a run is followed from its page: past the 8 MiB storage bindings ask for.
+    static constexpr size_t RunCap = size_t{16} << 20;
+    static constexpr size_t RunCacheSize = 4096;
+    static thread_local std::array<Run, RunCacheSize> runs{};
     const u64 owner = (u64{unique_identifier} << 1) | 1; // Never 0, the empty slot
     const u64 serial = map_serial.load(std::memory_order_acquire);
-    CachedRange& slot = cache[((gpu_addr >> 12) ^ (gpu_addr >> 21) ^ (size >> 12)) % RangeCacheSize];
-    if (slot.owner == owner && slot.serial == serial && slot.gpu_addr == gpu_addr &&
-        slot.size == size) [[likely]] {
-        return slot.result;
+    const GPUVAddr page = gpu_addr & ~page_mask;
+    Run& run = runs[(page >> page_bits) % RunCacheSize];
+    if (run.owner != owner || run.serial != serial || run.page != page) {
+        run = Run{owner, serial, page, page + WalkContinuousRange(page, RunCap)};
     }
-    const size_t result = WalkContinuousRange(gpu_addr, size);
-    slot = CachedRange{owner, serial, gpu_addr, size, result};
-    return result;
+    // Unless the walk stopped at its cap before the end asked for.
+    if (run.end > gpu_addr && (gpu_addr + size <= page + RunCap || run.end < page + RunCap)) {
+        return (std::min<size_t>)(size, run.end - gpu_addr);
+    }
+    return WalkContinuousRange(gpu_addr, size);
 }
 
 size_t MemoryManager::WalkContinuousRange(GPUVAddr gpu_addr, size_t size) const {

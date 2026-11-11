@@ -505,32 +505,6 @@ void BufferCache<P>::MarkUsed(DAddr device_addr, u64 size) {
 }
 
 template <class P>
-void BufferCache<P>::BindGraphicsUniformBuffer(size_t stage, u32 index, GPUVAddr gpu_addr,
-                                               u32 size) {
-    const std::optional<DAddr> device_addr = gpu_memory->GpuToCpuAddress(gpu_addr);
-    if (!device_addr) {
-        channel_state->uniform_buffers[stage][index] = NULL_BINDING;
-        return;
-    }
-    const Binding binding{
-        .device_addr = *device_addr,
-        .size = size,
-        .buffer_id = BufferId{},
-    };
-    channel_state->uniform_buffers[stage][index] = binding;
-}
-
-template <class P>
-void BufferCache<P>::DisableGraphicsUniformBuffer(size_t stage, u32 index) {
-    auto& current = channel_state->uniform_buffers[stage][index];
-    if (current.device_addr == 0 && current.size == 0 && current.buffer_id == NULL_BUFFER_ID)
-        [[likely]] {
-        return;
-    }
-    current = NULL_BINDING;
-}
-
-template <class P>
 void BufferCache<P>::UpdateGraphicsBuffers(bool is_indexed) {
     do {
         channel_state->has_deleted_buffers = false;
@@ -592,43 +566,10 @@ void BufferCache<P>::BindHostComputeBuffers() {
 }
 
 template <class P>
-void BufferCache<P>::SetUniformBuffersState(const std::array<u32, NUM_STAGES>& mask,
-                                            const UniformBufferSizes* sizes) {
-    if (channel_state->enabled_uniform_buffer_masks == mask &&
-        channel_state->uniform_buffer_sizes == sizes) [[likely]] {
-        return;
-    }
-    if (channel_state->enabled_uniform_buffer_masks != mask) {
-        channel_state->fast_bound_uniform_buffers.fill(0);
-        if constexpr (HAS_PERSISTENT_UNIFORM_BUFFER_BINDINGS) {
-            channel_state->dirty_uniform_buffers.fill(~u32{0});
-            channel_state->uniform_buffer_binding_sizes.fill({});
-        }
-        channel_state->enabled_uniform_buffer_masks = mask;
-    }
-    channel_state->uniform_buffer_sizes = sizes;
-}
-
-template <class P>
 void BufferCache<P>::SetComputeUniformBufferState(u32 mask,
                                                   const ComputeUniformBufferSizes* sizes) {
     channel_state->enabled_compute_uniform_buffer_mask = mask;
     channel_state->compute_uniform_buffer_sizes = sizes;
-}
-
-template <class P>
-void BufferCache<P>::UnbindGraphicsStorageBuffers(size_t stage) {
-    if (channel_state->enabled_storage_buffers[stage] == 0) {
-        return;
-    }
-    if constexpr (requires { runtime.ShouldLimitDynamicStorageBuffers(); }) {
-        if (runtime.ShouldLimitDynamicStorageBuffers()) {
-            channel_state->total_graphics_storage_buffers -=
-                static_cast<u32>(std::popcount(channel_state->enabled_storage_buffers[stage]));
-        }
-    }
-    channel_state->enabled_storage_buffers[stage] = 0;
-    channel_state->written_storage_buffers[stage] = 0;
 }
 
 template <class P>
@@ -677,16 +618,6 @@ bool BufferCache<P>::BindGraphicsStorageBuffer(size_t stage, size_t ssbo_index, 
                              maxwell3d->GetNativeMacroEngine().native_turing,
                              indirect_offset != ~0U);
     return (channel_state->storage_buffers[stage][ssbo_index].buffer_id != NULL_BUFFER_ID);
-}
-
-template <class P>
-void BufferCache<P>::UnbindGraphicsTextureBuffers(size_t stage) {
-    if (channel_state->enabled_texture_buffers[stage] == 0) {
-        return;
-    }
-    channel_state->enabled_texture_buffers[stage] = 0;
-    channel_state->written_texture_buffers[stage] = 0;
-    channel_state->image_texture_buffers[stage] = 0;
 }
 
 template <class P>

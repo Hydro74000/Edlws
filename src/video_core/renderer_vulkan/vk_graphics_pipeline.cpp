@@ -520,6 +520,8 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
     }
     const bool resolve_in_full{!memo_hit || verify_memo};
 
+    u32 last_sampler_handle = ~0U;
+    VideoCommon::SamplerId last_sampler{};
     const auto config_stage{[&](size_t stage) LAMBDA_FORCEINLINE {
         const Shader::Info& info{stage_infos[stage]};
         buffer_cache.UnbindGraphicsStorageBuffers(stage);
@@ -592,9 +594,11 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
                     const auto handle{read_handle(desc, index)};
                     views.push_back({handle.first});
 
-                    VideoCommon::SamplerId sampler{
-                        texture_cache.GetSamplerId(handle.second, false)};
-                    samplers.push_back(sampler);
+                    if (handle.second != last_sampler_handle) {
+                        last_sampler_handle = handle.second;
+                        last_sampler = texture_cache.GetSamplerId(handle.second, false);
+                    }
+                    samplers.push_back(last_sampler);
                     if (use_memo) {
                         handle_reads.push_back(
                             {handle_addresses[handle_reads.size()],

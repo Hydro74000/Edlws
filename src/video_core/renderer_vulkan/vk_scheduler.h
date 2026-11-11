@@ -97,7 +97,12 @@ public:
 
     /// Requests the current execution context to be able to execute operations only allowed outside
     /// of a renderpass.
-    void RequestOutsideRenderPassOperationContext();
+    void RequestOutsideRenderPassOperationContext() {
+        if (!state.renderpass && deferred_clear.framebuffer == nullptr) {
+            return;
+        }
+        EndRenderPass();
+    }
 
     /// Returns true when a render pass is currently active in the scheduler state.
     /// On tile-based GPUs, ending a render pass for a barrier is costly: a draw takes the
@@ -151,7 +156,12 @@ public:
     }
 
     /// Update the pipeline to the current execution context.
-    bool UpdateGraphicsPipeline(GraphicsPipeline* pipeline);
+    bool UpdateGraphicsPipeline(GraphicsPipeline* pipeline) {
+        if (state.graphics_pipeline == pipeline && !state.needs_state_enable_refresh) [[likely]] {
+            return false;
+        }
+        return UpdateGraphicsPipelineImpl(pipeline);
+    }
 
     /// Worker thread only: whether the pipeline last bound failed to build. Its draws were
     /// recorded before that was known, and must not reach the driver with what is bound instead.
@@ -389,6 +399,8 @@ private:
     /// Begins a render pass for the given framebuffer, optionally with clear values.
     void BeginRenderPassImpl(const Framebuffer* framebuffer, VkRenderPass renderpass,
                              const VkClearValue* clear_values, u32 clear_value_count);
+
+    bool UpdateGraphicsPipelineImpl(GraphicsPipeline* pipeline);
 
     /// If a deferred clear is pending.
     void RealizeDeferredClear();
