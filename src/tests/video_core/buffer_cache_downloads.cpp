@@ -258,6 +258,20 @@ TEST_CASE("Downloads keep CPU writes collected and not yet applied", "[video_cor
     REQUIRE(f.GuestIs(0x31008, 0x32000, 0x34));
 }
 
+TEST_CASE("A download over two buffers takes each buffer's part from that buffer",
+          "[video_core][downloads]") {
+    Fixture f;
+    const auto low = Access::Add(*f.cache, 0x20000, 0x10000);
+    const auto high = Access::Add(*f.cache, 0x30000, 0x10000);
+    std::ranges::fill(Access::Get(*f.cache, low).bytes, 0x12);
+    std::ranges::fill(Access::Get(*f.cache, high).bytes, 0x34);
+    Access::GpuWrite(*f.cache, 0x2f000, 0x2000);
+
+    f.cache->DownloadMemory(0x2f000, 0x2000);
+    REQUIRE(f.GuestIs(0x2f000, 0x30000, 0x12));
+    REQUIRE(f.GuestIs(0x30000, 0x31000, 0x34));
+}
+
 TEST_CASE("Fence downloads keep CPU writes collected after the copy was taken",
           "[video_core][cpu_writes]") {
     Fixture f;
