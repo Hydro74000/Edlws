@@ -208,6 +208,15 @@ void BufferCache<P>::WriteMemory(DAddr device_addr, u64 size, bool keep_page_gpu
     const DAddr page_end = Common::AlignUp(device_addr + size, DEVICE_PAGESIZE);
     if (keep_page_gpu_data && VideoCommon::GpuSplit::OwnsScheduler() &&
         gpu_modified_ranges.Intersects(page_begin, page_end - page_begin)) {
+        // Where buffer downloads are synchronous (native titles), upload the CPU's bytes into the
+        // buffer instead, as CachedWriteMemory does: the page stays GPU-owned with the GPU's bytes
+        // next to the write, and nothing waits for the host GPU.
+        if (!AsyncBufferDownloads() && IsRegionRegistered(device_addr, size)) {
+            tmp_buffer.resize_destructive(size);
+            device_memory.ReadBlockUnsafe(device_addr, tmp_buffer.data(), size);
+            InlineMemoryImplementation(device_addr, size, tmp_buffer);
+            return;
+        }
         DownloadMemory(page_begin, page_end - page_begin);
     }
     memory_tracker.MarkRegionAsCpuModified(device_addr, size);
@@ -256,8 +265,15 @@ std::optional<VideoCore::RasterizerDownloadArea> BufferCache<P>::GetFlushArea(DA
     DAddr device_addr_end_aligned = Common::AlignUp(device_addr + size, Core::DEVICE_PAGESIZE);
     area->start_address = device_addr_start_aligned;
     area->end_address = device_addr_end_aligned;
-    if (memory_tracker.IsRegionPreflushable(device_addr, size)) {
+    // Preflushable data is downloaded at fences, but only where it is marked (QueueGpuWrite): the
+    // rest of the range still needs this flush.
+    if (memory_tracker.IsRegionPreflushable(device_addr, size) &&
+        !HasGpuWritesNotDownloadedAtFence(device_addr_start_aligned,
+                                          device_addr_end_aligned - device_addr_start_aligned)) {
         area->preemtive = true;
+        // The core keeps this area: a later GPU write to its unmarked pages must arm them again.
+        read_trapped_ranges.Subtract(device_addr_start_aligned,
+                                     device_addr_end_aligned - device_addr_start_aligned);
         return area;
     };
     area->preemtive = !IsRegionGpuModified(device_addr_start_aligned,
@@ -279,7 +295,11 @@ std::optional<VideoCore::RasterizerDownloadArea> BufferCache<P>::GetFlushArea(DA
 template <class P>
 void BufferCache<P>::DownloadMemory(DAddr device_addr, u64 size) {
     ForEachBufferInRange(device_addr, size, [&](BufferId, Buffer& buffer) {
-        DownloadBufferMemory(buffer, device_addr, size);
+        const DAddr start = (std::max)(device_addr, buffer.CpuAddr());
+        const DAddr end = (std::min)(device_addr + size, buffer.CpuAddr() + buffer.SizeBytes());
+        if (start < end) {
+            DownloadBufferMemory(buffer, start, end - start);
+        }
     });
 }
 
@@ -365,11 +385,7 @@ bool BufferCache<P>::DMACopy(GPUVAddr src_address, GPUVAddr dest_address, u64 am
         const DAddr diff = base_address - *cpu_src_address;
         const DAddr new_base_address = *cpu_dest_address + diff;
         tmp_intervals.push_back({new_base_address, size});
-        if (DownloadsAtFence(new_base_address, size)) {
-            uncommitted_gpu_modified_ranges.Add(new_base_address, size);
-        } else {
-            ArmReadTraps(new_base_address, size);
-        }
+        QueueGpuWrite(new_base_address, size);
     };
     gpu_modified_ranges.ForEachInRange(*cpu_src_address, amount, mirror);
     // This subtraction in this order is important for overlapping copies.
@@ -1897,11 +1913,7 @@ void BufferCache<P>::MarkWrittenBuffer(BufferId buffer_id, DAddr device_addr, u3
     memory_tracker.MarkRegionAsGpuModified(device_addr, size);
     MarkVertexBuffersStale(device_addr, size);
     gpu_modified_ranges.Add(device_addr, size);
-    if (DownloadsAtFence(device_addr, size)) {
-        uncommitted_gpu_modified_ranges.Add(device_addr, size);
-    } else {
-        ArmReadTraps(device_addr, size);
-    }
+    QueueGpuWrite(device_addr, size);
     if (Tegra::g_nx2_ampere.load(std::memory_order_relaxed)) {
         Tegra::Nx2MarkGpuWritten(device_addr, size);
         Nx2NoteListWrite(buffer_id, device_addr, size);

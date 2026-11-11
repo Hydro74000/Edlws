@@ -109,6 +109,14 @@ struct Runtime {
                         copy.size);
         }
     }
+    void CopyBuffer(Buffer& dst, Buffer& src, std::span<const VideoCommon::BufferCopy> copies, bool,
+                    bool = false) {
+        CopyBuffer(dst, &src, copies, true);
+    }
+    void ClearBuffer(Buffer& dst, u32 offset, size_t size, u32 value) {
+        REQUIRE(offset + size <= dst.bytes.size());
+        std::memset(dst.bytes.data() + offset, static_cast<u8>(value), size);
+    }
     void Finish() {
         for (auto& copy : pending) {
             copy();
@@ -248,6 +256,20 @@ TEST_CASE("Downloads keep CPU writes collected and not yet applied", "[video_cor
     REQUIRE(f.GuestIs(0x30000, 0x30ff8, 0x34));
     REQUIRE(f.GuestIs(0x30ff8, 0x31008, 0xee));
     REQUIRE(f.GuestIs(0x31008, 0x32000, 0x34));
+}
+
+TEST_CASE("A download over two buffers takes each buffer's part from that buffer",
+          "[video_core][downloads]") {
+    Fixture f;
+    const auto low = Access::Add(*f.cache, 0x20000, 0x10000);
+    const auto high = Access::Add(*f.cache, 0x30000, 0x10000);
+    std::ranges::fill(Access::Get(*f.cache, low).bytes, 0x12);
+    std::ranges::fill(Access::Get(*f.cache, high).bytes, 0x34);
+    Access::GpuWrite(*f.cache, 0x2f000, 0x2000);
+
+    f.cache->DownloadMemory(0x2f000, 0x2000);
+    REQUIRE(f.GuestIs(0x2f000, 0x30000, 0x12));
+    REQUIRE(f.GuestIs(0x30000, 0x31000, 0x34));
 }
 
 TEST_CASE("Fence downloads keep CPU writes collected after the copy was taken",
