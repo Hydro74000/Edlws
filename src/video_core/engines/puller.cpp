@@ -103,6 +103,13 @@ bool Puller::CanResumeAcquire(DmaPusher& dma_pusher) {
     if (!pending_acquire) {
         return true;
     }
+    // A latched release resumes the channel whatever the word holds now: only the log below reads
+    // it, so drain the back for it during the first latched resumes only.
+    static std::atomic<u32> latched_checks{};
+    if (Nx2SemaphoreWaiters::Get().Latched(this) &&
+        latched_checks.fetch_add(1, std::memory_order_relaxed) >= 256) {
+        return true;
+    }
     // The release may still be queued for the split GPU thread's back half (and the caches
     // ReadSemaphoreWord asks are its state).
     DrainBack();
@@ -392,7 +399,13 @@ void Puller::ProcessSemaphoreExecute(DmaPusher& dma_pusher, u32 argument) {
         });
         return;
     }
-    // Acquires: check once after flushing pending fences; never block the GPU thread on them.
+    // Acquires: check once after flushing pending fences; never block the GPU thread on them. The
+    // check only feeds the warning below: drain the back for it during the first checks only.
+    static std::atomic<u32> checks{};
+    if (checks.fetch_add(1, std::memory_order_relaxed) >= 256) {
+        ReleaseFencesOnBack(dma_pusher);
+        return;
+    }
     DrainBack();
     ReleaseFencesOnBack(dma_pusher);
     u32 word = dma_pusher.memory_manager.Read<u32>(address);
