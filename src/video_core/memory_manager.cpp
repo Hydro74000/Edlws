@@ -645,6 +645,31 @@ bool MemoryManager::IsMemoryDirty(GPUVAddr gpu_addr, size_t size,
 }
 
 size_t MemoryManager::MaxContinuousRange(GPUVAddr gpu_addr, size_t size) const {
+    // Storage buffer bindings of native pointers ask this for the same few addresses at every
+    // draw, and the walk visits up to 2048 pages: a small per-thread cache tagged with the manager
+    // and its map serial, as GpuToCpuAddress keeps (the answer depends on the page tables only).
+    struct CachedRange {
+        u64 owner;
+        u64 serial;
+        GPUVAddr gpu_addr;
+        size_t size;
+        size_t result;
+    };
+    static constexpr size_t RangeCacheSize = 256;
+    static thread_local std::array<CachedRange, RangeCacheSize> cache{};
+    const u64 owner = (u64{unique_identifier} << 1) | 1; // Never 0, the empty slot
+    const u64 serial = map_serial.load(std::memory_order_acquire);
+    CachedRange& slot = cache[((gpu_addr >> 12) ^ (gpu_addr >> 21) ^ (size >> 12)) % RangeCacheSize];
+    if (slot.owner == owner && slot.serial == serial && slot.gpu_addr == gpu_addr &&
+        slot.size == size) [[likely]] {
+        return slot.result;
+    }
+    const size_t result = WalkContinuousRange(gpu_addr, size);
+    slot = CachedRange{owner, serial, gpu_addr, size, result};
+    return result;
+}
+
+size_t MemoryManager::WalkContinuousRange(GPUVAddr gpu_addr, size_t size) const {
     std::optional<DAddr> old_page_addr{};
     size_t range_so_far = 0;
     bool result{false};
