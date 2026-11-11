@@ -592,24 +592,6 @@ void BufferCache<P>::BindHostComputeBuffers() {
 }
 
 template <class P>
-void BufferCache<P>::SetUniformBuffersState(const std::array<u32, NUM_STAGES>& mask,
-                                            const UniformBufferSizes* sizes) {
-    if (channel_state->enabled_uniform_buffer_masks == mask &&
-        channel_state->uniform_buffer_sizes == sizes) [[likely]] {
-        return;
-    }
-    if (channel_state->enabled_uniform_buffer_masks != mask) {
-        channel_state->fast_bound_uniform_buffers.fill(0);
-        if constexpr (HAS_PERSISTENT_UNIFORM_BUFFER_BINDINGS) {
-            channel_state->dirty_uniform_buffers.fill(~u32{0});
-            channel_state->uniform_buffer_binding_sizes.fill({});
-        }
-        channel_state->enabled_uniform_buffer_masks = mask;
-    }
-    channel_state->uniform_buffer_sizes = sizes;
-}
-
-template <class P>
 void BufferCache<P>::SetComputeUniformBufferState(u32 mask,
                                                   const ComputeUniformBufferSizes* sizes) {
     channel_state->enabled_compute_uniform_buffer_mask = mask;
