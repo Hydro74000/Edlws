@@ -2811,20 +2811,25 @@ Binding BufferCache<P>::StorageBufferBinding(GPUVAddr ssbo_addr, u32 cbuf_index,
         return NULL_BINDING;
     }
 
+    // Native and table pointers are bare: what follows them is another parameter, not an NVN
+    // size. Bindings shaders only read take the mapped size. A written binding is marked
+    // GPU-modified whole at every bind (MarkWrittenBuffer): bound up to its 8 MiB mapping, it made
+    // CPU accesses anywhere in that range wait for the GPU (Mario Kart World 69 -> 37 presents/s
+    // at High). Written bindings keep the NVN sizing until GPU writes are tracked page by page.
+    const bool mapped_size = (native_pointer || table_pointer) && !is_written;
     u32 size = [&]() {
         const u32 memory_layout_size =
             static_cast<u32>(gpu_memory->GetMemoryLayoutSize(gpu_addr));
         // A pointer read from a table in memory is the base of an object pool, read anywhere in
         // it (Ocarina of Time's grass instances lie 12-18 MiB past theirs): bound to the end of
         // its mapping, up to 64 MiB. The 8 MiB cap made those reads return 0 and culled every
-        // blade. Written pools keep the cap: a write marks the whole binding GPU-modified.
-        if (table_pointer && !is_written) {
+        // blade.
+        if (table_pointer && mapped_size) {
             return (std::min)(memory_layout_size, static_cast<u32>(64_MiB));
         }
-        // A native (Switch 2) compute program's pointer is bare: the word after it is another
-        // parameter (a dimension, stride or texture handle), not an NVN buffer size. Taking it as
-        // one bound Fortune's Weave's DLSS input features to 266 bytes and dropped the rest.
-        if (native_pointer) {
+        // The NVN sizing would bind such a buffer up to whatever parameter follows the pointer
+        // (a texture handle bound Fortune's Weave's DLSS input features to 266 bytes).
+        if (mapped_size) {
             return (std::min)(memory_layout_size, static_cast<u32>(8_MiB));
         }
         const u64 next_qword = gpu_memory->Read<u64>(ssbo_addr + 8);
@@ -2837,9 +2842,8 @@ Binding BufferCache<P>::StorageBufferBinding(GPUVAddr ssbo_addr, u32 cbuf_index,
         }
         return (std::min)(memory_layout_size, static_cast<u32>(8_MiB));
     }();
-    if ((native_pointer || table_pointer) && size != 0) {
-        // Stop where the mapping or its device range does: the binding is one device range, and
-        // a written one isn't split into separate ranges without sparse sources.
+    if (mapped_size && size != 0) {
+        // Stop where the mapping or its device range does: the binding is one device range.
         size = static_cast<u32>(gpu_memory->MaxContinuousRange(gpu_addr, size));
     }
 
