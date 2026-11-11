@@ -190,6 +190,9 @@ public:
     u8* GetSpan(const GPUVAddr src_addr, const std::size_t size);
 
 private:
+    /// MaxContinuousRange without its per-thread cache: walks the page tables.
+    size_t WalkContinuousRange(GPUVAddr gpu_addr, size_t size) const;
+
     template <typename FuncMapped, typename FuncReserved, typename FuncUnmapped>
     inline void MemoryOperation(GPUVAddr gpu_src_addr, std::size_t size, bool is_big_page, FuncMapped&& func_mapped, FuncReserved&& func_reserved, FuncUnmapped&& func_unmapped) const;
 
