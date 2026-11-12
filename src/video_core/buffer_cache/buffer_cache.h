@@ -2788,12 +2788,29 @@ Binding BufferCache<P>::StorageBufferBinding(GPUVAddr ssbo_addr, u32 cbuf_index,
 }
 
 template <class P>
+size_t BufferCache<P>::KindRunFrom(GPUVAddr gpu_addr) const {
+    // Pointers that move draw after draw through their allocations miss the resolutions kept per
+    // pointer: the kind run they lie in answers without the memory manager's lock.
+    const u64 serial = gpu_memory->MapSerial();
+    const u64 owner = (u64{gpu_memory->GetID()} << 1) | 1;
+    for (const KindRun& run : kind_runs) {
+        if (run.owner == owner && run.serial == serial && run.begin <= gpu_addr &&
+            gpu_addr < run.end) {
+            return run.end - gpu_addr;
+        }
+    }
+    const size_t size = gpu_memory->GetMemoryLayoutSize(gpu_addr);
+    kind_runs[next_kind_run] = KindRun{owner, serial, gpu_addr, gpu_addr + size};
+    next_kind_run = (next_kind_run + 1) % kind_runs.size();
+    return size;
+}
+
+template <class P>
 Binding BufferCache<P>::ResolveStorageBinding(GPUVAddr gpu_addr, u64 next_qword, u32 cbuf_index,
                                               bool is_written, bool mapped_size,
                                               bool table_pointer) const {
     u32 size = [&]() {
-        const u32 memory_layout_size =
-            static_cast<u32>(gpu_memory->GetMemoryLayoutSize(gpu_addr));
+        const u32 memory_layout_size = static_cast<u32>(KindRunFrom(gpu_addr));
         // A pointer read from a table in memory is the base of an object pool, read anywhere in
         // it (Ocarina of Time's grass instances lie 12-18 MiB past theirs): bound to the end of
         // its mapping, up to 64 MiB. The 8 MiB cap made those reads return 0 and culled every

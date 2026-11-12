@@ -338,6 +338,12 @@ TEST_CASE("Storage buffer bindings follow a remap of the pages their pointer poi
     REQUIRE(read.device_addr == 0x18000);
     REQUIRE(read.size == 0x18000);
     REQUIRE(Access::NativeStorage(*f.cache, Base + 0x100, false).device_addr == 0x18000);
+    // A pointer further into the same allocation (they move draw after draw).
+    const u64 further = Base + 0x9000;
+    std::memcpy(f.Guest(0x10200), &further, sizeof(further));
+    const VideoCommon::Binding next = Access::NativeStorage(*f.cache, Base + 0x200, false);
+    REQUIRE(next.device_addr == 0x19000);
+    REQUIRE(next.size == 0x17000);
     const VideoCommon::Binding written = Access::NativeStorage(*f.cache, Base + 0x100, true);
     REQUIRE(written.device_addr == 0x18000);
     REQUIRE(written.size == 0x2000);
@@ -354,4 +360,5 @@ TEST_CASE("Storage buffer bindings follow a remap of the pages their pointer poi
     REQUIRE(moved.device_addr == 0x30000);
     REQUIRE(moved.size == 0x8000);
     REQUIRE(Access::NativeStorage(*f.cache, Base + 0x100, true).device_addr == 0x30000);
+    REQUIRE(Access::NativeStorage(*f.cache, Base + 0x200, false).device_addr == 0x31000);
 }

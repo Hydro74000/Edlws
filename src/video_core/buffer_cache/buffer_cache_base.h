@@ -644,6 +644,9 @@ private:
                                                 bool is_written, bool mapped_size,
                                                 bool table_pointer) const;
 
+    /// GetMemoryLayoutSize: the size from gpu_addr to the end of its run in the kind map.
+    [[nodiscard]] size_t KindRunFrom(GPUVAddr gpu_addr) const;
+
     [[nodiscard]] TextureBufferBinding GetTextureBufferBinding(GPUVAddr gpu_addr, u32 size,
                                                                PixelFormat format);
 
@@ -813,6 +816,16 @@ private:
     };
     static constexpr size_t NumStorageResolutions = 1024;
     mutable std::array<StorageResolution, NumStorageResolutions> storage_resolutions{};
+
+    /// The kind map runs KindRunFrom found last: from any address inside one, the run ends at end.
+    struct KindRun {
+        u64 owner{};
+        u64 serial{};
+        GPUVAddr begin{};
+        GPUVAddr end{};
+    };
+    mutable std::array<KindRun, 8> kind_runs{};
+    mutable size_t next_kind_run = 0; ///< Replaced next
 
     ReadTrapTracker read_trapped_ranges;
     Common::RangeSet<DAddr> gpu_modified_ranges;
