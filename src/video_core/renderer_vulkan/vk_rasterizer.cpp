@@ -1303,11 +1303,17 @@ void RasterizerVulkan::InnerInvalidation(std::span<const std::pair<DAddr, std::s
             texture_cache.WriteMemory(addr, size);
         }
     }
-    {
-        std::scoped_lock lock{buffer_cache.mutex};
-        for (const auto& [addr, size] : sequences) {
-            buffer_cache.WriteMemory(addr, size);
+    // Constant buffer data only streamed uniform buffers read needs no buffer cache work (nor its
+    // lock): those pages are CPU-modified already (Lichii 31ae51bd67, #1441).
+    boost::container::small_vector<std::pair<DAddr, std::size_t>, 16> reaching;
+    for (const auto& range : sequences) {
+        if (buffer_cache.CachedWriteReachesBuffers(range.first, range.second)) {
+            reaching.push_back(range);
         }
+    }
+    if (!reaching.empty()) {
+        std::scoped_lock lock{buffer_cache.mutex};
+        buffer_cache.WriteMemories(reaching);
     }
     for (const auto& [addr, size] : sequences) {
         query_cache.InvalidateRegion(addr, size);

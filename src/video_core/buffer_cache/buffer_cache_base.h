@@ -25,6 +25,7 @@
 
 #include "common/common_types.h"
 #include "common/spin_recursive_mutex.h"
+#include "common/alignment.h"
 #include "common/div_ceil.h"
 #include "common/literals.h"
 #include "common/lru_cache.h"
@@ -43,6 +44,7 @@
 #include "video_core/engines/kepler_compute.h"
 #include "video_core/engines/maxwell_3d.h"
 #include "video_core/memory_manager.h"
+#include "video_core/nx2.h"
 #include "video_core/surface.h"
 #include "video_core/texture_cache/types.h"
 
@@ -386,7 +388,57 @@ public:
     /// Takes collected CPU writes out of the GPU-written ranges before any of them is applied:
     /// applying one downloads the GPU's bytes elsewhere on its pages (WriteMemory), which would
     /// otherwise land over the next one.
-    void ClaimCpuWrites(std::span<const std::pair<DAddr, u64>> writes);
+    /// Any range of (address, size) pairs: their size types differ between callers (std::size_t
+    /// and u64 aren't the same type everywhere). Defined here, since the renderers instantiate the
+    /// class explicitly and that leaves member templates out.
+    template <typename Writes>
+    void ClaimCpuWrites(const Writes& writes) {
+        for (const auto& [device_addr, size] : writes) {
+            if (IsRegionGpuModified(device_addr, size)) {
+                ClearDownload(device_addr, size);
+                gpu_modified_ranges.Subtract(device_addr, size);
+            }
+        }
+    }
+
+    /// Whether the GPU's own cached writes (constant buffer data) to [device_addr, device_addr +
+    /// size) need WriteMemory. On pages no buffer was ever uploaded from and nothing marked
+    /// GPU-modified or Preflushable it would change nothing: they are CPU-modified still, and the
+    /// uniform buffers streamed from them read guest memory. Command list copies and repacked
+    /// vertex buffers still have to learn of the write. Drawing thread, without the lock.
+    [[nodiscard]] bool CachedWriteReachesBuffers(DAddr device_addr, u64 size) const {
+        if (memory_tracker.IsRegionEverSynchronized(device_addr, size)) {
+            return true;
+        }
+        if (Tegra::g_nx2_has_command_list_pages.load(std::memory_order_relaxed)) {
+            for (DAddr page = Common::AlignDown(device_addr, Core::DEVICE_PAGESIZE);
+                 page < device_addr + size; page += Core::DEVICE_PAGESIZE) {
+                if (Tegra::Nx2IsCommandListPage(page)) {
+                    return true;
+                }
+            }
+        }
+        if constexpr (requires { runtime.AnyVertexRepacked(); }) {
+            if (runtime.AnyVertexRepacked()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// Applies a batch of the GPU's own cached writes (constant buffer data). Where buffer
+    /// downloads are asynchronous, applying one downloads the GPU's bytes elsewhere on its pages
+    /// over the next ones unless they are claimed first (Lichii #1460); native titles upload the
+    /// written bytes inline instead.
+    template <typename Writes>
+    void WriteMemories(const Writes& writes) {
+        if (AsyncBufferDownloads()) {
+            ClaimCpuWrites(writes);
+        }
+        for (const auto& [device_addr, size] : writes) {
+            WriteMemory(device_addr, size);
+        }
+    }
 
     /// Return true when there are uncommitted buffers to be downloaded
     [[nodiscard]] bool HasUncommittedFlushes() const noexcept;

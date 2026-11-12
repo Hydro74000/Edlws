@@ -315,16 +315,6 @@ void BufferCache<P>::ClearDownload(DAddr device_addr, u64 size) {
 }
 
 template <class P>
-void BufferCache<P>::ClaimCpuWrites(std::span<const std::pair<DAddr, u64>> writes) {
-    for (const auto& [device_addr, size] : writes) {
-        if (IsRegionGpuModified(device_addr, size)) {
-            ClearDownload(device_addr, size);
-            gpu_modified_ranges.Subtract(device_addr, size);
-        }
-    }
-}
-
-template <class P>
 CpuWriteRuns BufferCache<P>::CollectPendingCpuWrites() const {
     CpuWriteRuns runs;
     if (pending_cpu_writes) {
