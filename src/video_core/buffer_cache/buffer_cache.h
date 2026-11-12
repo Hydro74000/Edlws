@@ -613,11 +613,12 @@ bool BufferCache<P>::BindGraphicsStorageBuffer(size_t stage, size_t ssbo_index, 
         }
         ssbo_addr = holder + indirect_offset;
     }
-    channel_state->storage_buffers[stage][ssbo_index] =
-        StorageBufferBinding(ssbo_addr, cbuf_index, is_written,
-                             maxwell3d->GetNativeMacroEngine().native_turing,
-                             indirect_offset != ~0U);
-    return (channel_state->storage_buffers[stage][ssbo_index].buffer_id != NULL_BUFFER_ID);
+    Binding& slot = channel_state->storage_buffers[stage][ssbo_index];
+    const bool native = maxwell3d->GetNativeMacroEngine().native_turing;
+    const bool table = indirect_offset != ~0U;
+    slot = KeepStorageBuffer(slot,
+                             StorageBufferBinding(ssbo_addr, cbuf_index, is_written, native, table));
+    return slot.buffer_id != NULL_BUFFER_ID;
 }
 
 template <class P>
@@ -692,9 +693,10 @@ void BufferCache<P>::BindComputeStorageBuffer(size_t ssbo_index, u32 cbuf_index,
         }
         ssbo_addr = holder + indirect_offset;
     }
-    channel_state->compute_storage_buffers[ssbo_index] =
-        StorageBufferBinding(ssbo_addr, cbuf_index, is_written, kepler_compute->IsNativeMode(),
-                             indirect_offset != ~0U);
+    Binding& slot = channel_state->compute_storage_buffers[ssbo_index];
+    slot = KeepStorageBuffer(slot, StorageBufferBinding(ssbo_addr, cbuf_index, is_written,
+                                                        kepler_compute->IsNativeMode(),
+                                                        indirect_offset != ~0U));
 }
 
 template <class P>
@@ -1068,7 +1070,12 @@ void BufferCache<P>::BindHostVertexBuffers() {
             }
             bindings.max_index = bindings.min_index + static_cast<u32>(bindings.buffers.size());
             runtime.BindVertexBuffers(bindings);
-            bindings = HostBindings<Buffer>{};
+            bindings.buffers.clear();
+            bindings.offsets.clear();
+            bindings.sizes.clear();
+            bindings.strides.clear();
+            bindings.min_index = NUM_VERTEX_BUFFERS;
+            bindings.max_index = 0;
             last_index = (std::numeric_limits<u32>::max)();
         };
         while (enabled_mask != 0) {
@@ -1290,7 +1297,7 @@ void BufferCache<P>::ResolveMultiRangeStorage(Binding& binding, bool is_written,
     binding.segment_first = 0;
     binding.segment_count = 0;
     if constexpr (requires { runtime.BindMultiRangeStorageBuffer(u64{}, bool{}); }) {
-        if (binding.gpu_addr == 0 || binding.size == 0) {
+        if (binding.one_range || binding.gpu_addr == 0 || binding.size == 0) {
             return;
         }
         if (is_written && !runtime.PrefersSparseSources()) {
@@ -1743,8 +1750,7 @@ void BufferCache<P>::UpdateStorageBuffers(size_t stage) {
     ForEachEnabledBit(channel_state->enabled_storage_buffers[stage], [&](u32 index) {
         // Resolve buffer
         Binding& binding = channel_state->storage_buffers[stage][index];
-        const BufferId buffer_id = FindBuffer(binding.device_addr, binding.size, false);
-        binding.buffer_id = buffer_id;
+        ResolveStorageBuffer(binding);
         const bool is_written = ((channel_state->written_storage_buffers[stage] >> index) & 1) != 0;
         ResolveMultiRangeStorage(binding, is_written, graphics_segments);
     });
@@ -1812,7 +1818,7 @@ void BufferCache<P>::UpdateComputeStorageBuffers() {
     ForEachEnabledBit(channel_state->enabled_compute_storage_buffers, [&](u32 index) {
         // Resolve buffer
         Binding& binding = channel_state->compute_storage_buffers[index];
-        binding.buffer_id = FindBuffer(binding.device_addr, binding.size, false);
+        ResolveStorageBuffer(binding);
         const bool is_written =
             ((channel_state->written_compute_storage_buffers >> index) & 1) != 0;
         ResolveMultiRangeStorage(binding, is_written, compute_segments);
@@ -2299,7 +2305,8 @@ void BufferCache<P>::ChangeRegister(BufferId buffer_id) {
 
 template <class P>
 void BufferCache<P>::TouchBuffer(Buffer& buffer, BufferId buffer_id) noexcept {
-    if (buffer_id != NULL_BUFFER_ID) {
+    if (buffer_id != NULL_BUFFER_ID && buffer.LruFrame() != frame_tick) {
+        buffer.SetLruFrame(frame_tick);
         lru_cache.Touch(buffer.getLRUID(), frame_tick);
     }
 }
@@ -2760,9 +2767,50 @@ Binding BufferCache<P>::StorageBufferBinding(GPUVAddr ssbo_addr, u32 cbuf_index,
     // CPU accesses anywhere in that range wait for the GPU (Mario Kart World 69 -> 37 presents/s
     // at High). Written bindings keep the NVN sizing until GPU writes are tracked page by page.
     const bool mapped_size = (native_pointer || table_pointer) && !is_written;
+    const u64 next_qword = mapped_size ? 0 : gpu_memory->Read<u64>(ssbo_addr + 8);
+    // Draws bind the same few pointers again and again, and the rest of the answer depends on the
+    // page tables only: keep it until they change (the serial is read before them).
+    const u64 serial = gpu_memory->MapSerial();
+    const u64 owner = (u64{gpu_memory->GetID()} << 1) | 1;
+    const u8 flags = static_cast<u8>((is_written ? 1 : 0) | (native_pointer ? 2 : 0) |
+                                     (table_pointer ? 4 : 0));
+    StorageResolution& memo =
+        storage_resolutions[((gpu_addr >> 4) ^ (gpu_addr >> 18) ^ next_qword ^ flags) %
+                            NumStorageResolutions];
+    if (memo.owner == owner && memo.serial == serial && memo.gpu_addr == gpu_addr &&
+        memo.next_qword == next_qword && memo.flags == flags) [[likely]] {
+        return memo.binding;
+    }
+    const Binding binding = ResolveStorageBinding(gpu_addr, next_qword, cbuf_index, is_written,
+                                                  mapped_size, table_pointer);
+    memo = StorageResolution{owner, serial, gpu_addr, next_qword, flags, binding};
+    return binding;
+}
+
+template <class P>
+size_t BufferCache<P>::KindRunFrom(GPUVAddr gpu_addr) const {
+    // Pointers that move draw after draw through their allocations miss the resolutions kept per
+    // pointer: the kind run they lie in answers without the memory manager's lock.
+    const u64 serial = gpu_memory->MapSerial();
+    const u64 owner = (u64{gpu_memory->GetID()} << 1) | 1;
+    for (const KindRun& run : kind_runs) {
+        if (run.owner == owner && run.serial == serial && run.begin <= gpu_addr &&
+            gpu_addr < run.end) {
+            return run.end - gpu_addr;
+        }
+    }
+    const size_t size = gpu_memory->GetMemoryLayoutSize(gpu_addr);
+    kind_runs[next_kind_run] = KindRun{owner, serial, gpu_addr, gpu_addr + size};
+    next_kind_run = (next_kind_run + 1) % kind_runs.size();
+    return size;
+}
+
+template <class P>
+Binding BufferCache<P>::ResolveStorageBinding(GPUVAddr gpu_addr, u64 next_qword, u32 cbuf_index,
+                                              bool is_written, bool mapped_size,
+                                              bool table_pointer) const {
     u32 size = [&]() {
-        const u32 memory_layout_size =
-            static_cast<u32>(gpu_memory->GetMemoryLayoutSize(gpu_addr));
+        const u32 memory_layout_size = static_cast<u32>(KindRunFrom(gpu_addr));
         // A pointer read from a table in memory is the base of an object pool, read anywhere in
         // it (Ocarina of Time's grass instances lie 12-18 MiB past theirs): bound to the end of
         // its mapping, up to 64 MiB. The 8 MiB cap made those reads return 0 and culled every
@@ -2775,7 +2823,6 @@ Binding BufferCache<P>::StorageBufferBinding(GPUVAddr ssbo_addr, u32 cbuf_index,
         if (mapped_size) {
             return (std::min)(memory_layout_size, static_cast<u32>(8_MiB));
         }
-        const u64 next_qword = gpu_memory->Read<u64>(ssbo_addr + 8);
         const u32 packed_size = static_cast<u32>(next_qword);
         const bool next_qword_is_size = static_cast<u32>(next_qword >> 32) == 0 &&
                                         packed_size != 0 &&
@@ -2810,11 +2857,14 @@ Binding BufferCache<P>::StorageBufferBinding(GPUVAddr ssbo_addr, u32 cbuf_index,
     if (is_written) {
         binding_size = aligned_size;
     }
+    // A mapped size stops where the device range does: the aligned start lies on the same page
+    // (alignments are below a page) and the end is rounded up within the last one.
     const Binding binding{
         .device_addr = *aligned_device_addr,
         .gpu_addr = aligned_gpu_addr,
         .size = binding_size,
         .buffer_id = BufferId{},
+        .one_range = mapped_size,
     };
     return binding;
 }

@@ -94,6 +94,7 @@ struct Binding {
     BufferId buffer_id;
     u32 segment_first{};
     u32 segment_count{};
+    bool one_range{}; ///< Sized to one device range already (MaxContinuousRange)
 };
 
 struct MultiRangeSegment {
@@ -615,6 +616,37 @@ private:
                                                bool native_pointer = false,
                                                bool table_pointer = false) const;
 
+    /// A storage binding of the same range as the slot's previous one keeps the buffer found for
+    /// it: DeleteBuffer clears the ids it frees in every channel's bindings.
+    [[nodiscard]] static Binding KeepStorageBuffer(const Binding& previous,
+                                                   Binding binding) noexcept {
+        if (previous.buffer_id && previous.buffer_id != NULL_BUFFER_ID &&
+            binding.device_addr == previous.device_addr && binding.size == previous.size) {
+            binding.buffer_id = previous.buffer_id;
+        }
+        return binding;
+    }
+
+    /// Finds the buffer of a storage binding that has none yet (FindBuffer's write wait included
+    /// for one it kept).
+    void ResolveStorageBuffer(Binding& binding) {
+        if (!binding.buffer_id) {
+            binding.buffer_id = FindBuffer(binding.device_addr, binding.size, false);
+        } else if (binding.buffer_id != NULL_BUFFER_ID && Settings::IsGPUFenceBehaviorAccurate()) {
+            SynchronizeBufferWrites(slot_buffers[binding.buffer_id]);
+        }
+    }
+
+    /// The binding of the storage buffer at gpu_addr: what StorageBufferBinding reads from guest
+    /// memory (the pointer, and for NVN sizes the word after it) is given, the rest depends on
+    /// the page tables only.
+    [[nodiscard]] Binding ResolveStorageBinding(GPUVAddr gpu_addr, u64 next_qword, u32 cbuf_index,
+                                                bool is_written, bool mapped_size,
+                                                bool table_pointer) const;
+
+    /// GetMemoryLayoutSize: the size from gpu_addr to the end of its run in the kind map.
+    [[nodiscard]] size_t KindRunFrom(GPUVAddr gpu_addr) const;
+
     [[nodiscard]] TextureBufferBinding GetTextureBufferBinding(GPUVAddr gpu_addr, u32 size,
                                                                PixelFormat format);
 
@@ -772,6 +804,28 @@ private:
             device_memory.ArmReadTraps(part, part_size);
         });
     }
+
+    /// ResolveStorageBinding's answers, for the address space and map serial they were found in.
+    struct StorageResolution {
+        u64 owner{}; ///< (memory manager id << 1) | 1, never 0: 0 is an empty entry
+        u64 serial{};
+        GPUVAddr gpu_addr{};
+        u64 next_qword{};
+        u8 flags{};
+        Binding binding{};
+    };
+    static constexpr size_t NumStorageResolutions = 1024;
+    mutable std::array<StorageResolution, NumStorageResolutions> storage_resolutions{};
+
+    /// The kind map runs KindRunFrom found last: from any address inside one, the run ends at end.
+    struct KindRun {
+        u64 owner{};
+        u64 serial{};
+        GPUVAddr begin{};
+        GPUVAddr end{};
+    };
+    mutable std::array<KindRun, 8> kind_runs{};
+    mutable size_t next_kind_run = 0; ///< Replaced next
 
     ReadTrapTracker read_trapped_ranges;
     Common::RangeSet<DAddr> gpu_modified_ranges;
