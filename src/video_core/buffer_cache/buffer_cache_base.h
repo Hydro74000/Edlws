@@ -615,6 +615,13 @@ private:
                                                bool native_pointer = false,
                                                bool table_pointer = false) const;
 
+    /// The binding of the storage buffer at gpu_addr: what StorageBufferBinding reads from guest
+    /// memory (the pointer, and for NVN sizes the word after it) is given, the rest depends on
+    /// the page tables only.
+    [[nodiscard]] Binding ResolveStorageBinding(GPUVAddr gpu_addr, u64 next_qword, u32 cbuf_index,
+                                                bool is_written, bool mapped_size,
+                                                bool table_pointer) const;
+
     [[nodiscard]] TextureBufferBinding GetTextureBufferBinding(GPUVAddr gpu_addr, u32 size,
                                                                PixelFormat format);
 
@@ -772,6 +779,18 @@ private:
             device_memory.ArmReadTraps(part, part_size);
         });
     }
+
+    /// ResolveStorageBinding's answers, for the address space and map serial they were found in.
+    struct StorageResolution {
+        u64 owner{}; ///< (memory manager id << 1) | 1, never 0: 0 is an empty entry
+        u64 serial{};
+        GPUVAddr gpu_addr{};
+        u64 next_qword{};
+        u8 flags{};
+        Binding binding{};
+    };
+    static constexpr size_t NumStorageResolutions = 1024;
+    mutable std::array<StorageResolution, NumStorageResolutions> storage_resolutions{};
 
     ReadTrapTracker read_trapped_ranges;
     Common::RangeSet<DAddr> gpu_modified_ranges;

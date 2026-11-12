@@ -23,6 +23,7 @@
 #include "video_core/buffer_cache/memory_tracker_base.h"
 #include "video_core/gpu.h"
 #include "video_core/gpu_split.h"
+#include "video_core/memory_manager.h"
 #include "video_core/renderer_null/null_rasterizer.h"
 
 namespace {
@@ -169,6 +170,13 @@ struct BufferCacheTestAccess {
         cache.gpu_modified_ranges.Add(address, size);
         cache.uncommitted_gpu_modified_ranges.Add(address, size);
     }
+    static void SetGpuMemory(Cache& cache, Tegra::MemoryManager& gpu_memory) {
+        cache.gpu_memory = &gpu_memory;
+    }
+    /// The storage buffer a native program's pointer at ssbo_addr binds.
+    static Binding NativeStorage(Cache& cache, GPUVAddr ssbo_addr, bool is_written) {
+        return cache.StorageBufferBinding(ssbo_addr, 0, is_written, true);
+    }
 };
 
 } // namespace VideoCommon
@@ -309,4 +317,41 @@ TEST_CASE("Applying collected CPU writes one by one keeps the ones still to appl
     REQUIRE(f.GuestIs(0x20140, 0x20800, 0x78));
     REQUIRE(f.GuestIs(0x20800, 0x20840, 0xbb));
     REQUIRE(f.GuestIs(0x20840, 0x21000, 0x78));
+}
+
+TEST_CASE("Storage buffer bindings follow a remap of the pages their pointer points to",
+          "[video_core][storage_bindings]") {
+    Fixture f;
+    Tegra::MemoryManager gpu{f.system, f.device};
+    gpu.BindRasterizer(&f.rasterizer);
+    Access::SetGpuMemory(*f.cache, gpu);
+    constexpr GPUVAddr Base = 0x10000000;
+    gpu.Map(Base, 0x10000, 0x20000, Tegra::PTEKind::PITCH, false);
+    // The program's pointer, at Base + 0x100, to Base + 0x8000; for a written binding, the word
+    // after it is an NVN size.
+    const u64 pointer = Base + 0x8000;
+    const u64 nvn_size = 0x2000;
+    std::memcpy(f.Guest(0x10100), &pointer, sizeof(pointer));
+    std::memcpy(f.Guest(0x10108), &nvn_size, sizeof(nvn_size));
+
+    const VideoCommon::Binding read = Access::NativeStorage(*f.cache, Base + 0x100, false);
+    REQUIRE(read.device_addr == 0x18000);
+    REQUIRE(read.size == 0x18000);
+    REQUIRE(Access::NativeStorage(*f.cache, Base + 0x100, false).device_addr == 0x18000);
+    const VideoCommon::Binding written = Access::NativeStorage(*f.cache, Base + 0x100, true);
+    REQUIRE(written.device_addr == 0x18000);
+    REQUIRE(written.size == 0x2000);
+
+    // The word after the pointer changes: a written binding takes the new size.
+    const u64 new_size = 0x3000;
+    std::memcpy(f.Guest(0x10108), &new_size, sizeof(new_size));
+    REQUIRE(Access::NativeStorage(*f.cache, Base + 0x100, true).size == 0x3000);
+
+    // The pages the pointer points to move in device memory.
+    gpu.Unmap(Base + 0x8000, 0x8000);
+    gpu.Map(Base + 0x8000, 0x30000, 0x8000, Tegra::PTEKind::PITCH, false);
+    const VideoCommon::Binding moved = Access::NativeStorage(*f.cache, Base + 0x100, false);
+    REQUIRE(moved.device_addr == 0x30000);
+    REQUIRE(moved.size == 0x8000);
+    REQUIRE(Access::NativeStorage(*f.cache, Base + 0x100, true).device_addr == 0x30000);
 }

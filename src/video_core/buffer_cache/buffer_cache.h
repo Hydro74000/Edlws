@@ -2760,6 +2760,30 @@ Binding BufferCache<P>::StorageBufferBinding(GPUVAddr ssbo_addr, u32 cbuf_index,
     // CPU accesses anywhere in that range wait for the GPU (Mario Kart World 69 -> 37 presents/s
     // at High). Written bindings keep the NVN sizing until GPU writes are tracked page by page.
     const bool mapped_size = (native_pointer || table_pointer) && !is_written;
+    const u64 next_qword = mapped_size ? 0 : gpu_memory->Read<u64>(ssbo_addr + 8);
+    // Draws bind the same few pointers again and again, and the rest of the answer depends on the
+    // page tables only: keep it until they change (the serial is read before them).
+    const u64 serial = gpu_memory->MapSerial();
+    const u64 owner = (u64{gpu_memory->GetID()} << 1) | 1;
+    const u8 flags = static_cast<u8>((is_written ? 1 : 0) | (native_pointer ? 2 : 0) |
+                                     (table_pointer ? 4 : 0));
+    StorageResolution& memo =
+        storage_resolutions[((gpu_addr >> 4) ^ (gpu_addr >> 18) ^ next_qword ^ flags) %
+                            NumStorageResolutions];
+    if (memo.owner == owner && memo.serial == serial && memo.gpu_addr == gpu_addr &&
+        memo.next_qword == next_qword && memo.flags == flags) [[likely]] {
+        return memo.binding;
+    }
+    const Binding binding = ResolveStorageBinding(gpu_addr, next_qword, cbuf_index, is_written,
+                                                  mapped_size, table_pointer);
+    memo = StorageResolution{owner, serial, gpu_addr, next_qword, flags, binding};
+    return binding;
+}
+
+template <class P>
+Binding BufferCache<P>::ResolveStorageBinding(GPUVAddr gpu_addr, u64 next_qword, u32 cbuf_index,
+                                              bool is_written, bool mapped_size,
+                                              bool table_pointer) const {
     u32 size = [&]() {
         const u32 memory_layout_size =
             static_cast<u32>(gpu_memory->GetMemoryLayoutSize(gpu_addr));
@@ -2775,7 +2799,6 @@ Binding BufferCache<P>::StorageBufferBinding(GPUVAddr ssbo_addr, u32 cbuf_index,
         if (mapped_size) {
             return (std::min)(memory_layout_size, static_cast<u32>(8_MiB));
         }
-        const u64 next_qword = gpu_memory->Read<u64>(ssbo_addr + 8);
         const u32 packed_size = static_cast<u32>(next_qword);
         const bool next_qword_is_size = static_cast<u32>(next_qword >> 32) == 0 &&
                                         packed_size != 0 &&
