@@ -28,24 +28,140 @@ using RangeSetsAllocator =
                                boost::details::pool::default_mutex, 1024, 2048>;
 }
 
-// Sorted, disjoint, non-touching ranges in one array. The buffer cache looks these up tens of
-// thousands of times a frame and most lookups miss; sets stay small (Ocarina of Time: ~200 ranges
-// at a subtract, 763 at most), so moving a few hundred bytes on an insert costs less than tree
-// nodes from a locked pool.
+// Sorted, disjoint, non-touching ranges, in address order across blocks of at most MaxBlock. The
+// buffer cache looks these up tens of thousands of times a frame and most lookups miss, so they
+// stay in arrays rather than tree nodes. One flat array moved thousands of ranges on each insert
+// once a game kept thousands of GPU-written ranges (Donkey Kong Bananza: up to 6,000 ranges and
+// 30,000 inserts a second); an insert into a block moves at most MaxBlock.
 template <typename AddressType>
 struct RangeSet<AddressType>::RangeSetImpl {
     struct Range {
         AddressType lower;
         AddressType upper;
     };
-    using Iterator = typename std::vector<Range>::iterator;
-    using ConstIterator = typename std::vector<Range>::const_iterator;
+    using Block = std::vector<Range>;
+    static constexpr size_t MaxBlock = 128;
 
-    /// The first range ending after `address`, the first that could overlap what starts there.
-    ConstIterator FirstEndingAfter(AddressType address) const {
-        return std::upper_bound(
-            m_ranges.begin(), m_ranges.end(), address,
-            [](AddressType value, const Range& range) { return value < range.upper; });
+    /// A range's place: its block and its index there. The end is {m_blocks.size(), 0}.
+    struct Pos {
+        size_t block;
+        size_t index;
+        bool operator==(const Pos&) const = default;
+    };
+
+    Pos End() const {
+        return {m_blocks.size(), 0};
+    }
+    Range& At(Pos pos) {
+        return m_blocks[pos.block][pos.index];
+    }
+    const Range& At(Pos pos) const {
+        return m_blocks[pos.block][pos.index];
+    }
+    Pos Next(Pos pos) const {
+        return pos.index + 1 < m_blocks[pos.block].size() ? Pos{pos.block, pos.index + 1}
+                                                          : Pos{pos.block + 1, 0};
+    }
+    Pos Prev(Pos pos) const {
+        return pos.index > 0 ? Pos{pos.block, pos.index - 1}
+                             : Pos{pos.block - 1, m_blocks[pos.block - 1].size() - 1};
+    }
+
+    /// The first range whose end passes `address` (`reaching`: or reaches it).
+    template <bool reaching>
+    Pos FirstEnding(AddressType address) const {
+        const auto ends_before = [address](AddressType upper) {
+            return reaching ? upper < address : upper <= address;
+        };
+        const size_t block =
+            std::partition_point(m_last_upper.begin(), m_last_upper.end(), ends_before) -
+            m_last_upper.begin();
+        if (block == m_blocks.size()) {
+            return End();
+        }
+        const Block& ranges = m_blocks[block];
+        const auto it = std::partition_point(ranges.begin(), ranges.end(), [&](const Range& range) {
+            return ends_before(range.upper);
+        });
+        return {block, static_cast<size_t>(it - ranges.begin())};
+    }
+
+    /// From `from` on, the first range whose start passes `address` (`reaching`: or reaches it).
+    /// The blocks it walks past hold ranges the caller joins or removes.
+    template <bool reaching>
+    Pos FirstStarting(Pos from, AddressType address) const {
+        const auto starts_before = [address](const Range& range) {
+            return reaching ? range.lower < address : range.lower <= address;
+        };
+        for (size_t block = from.block; block < m_blocks.size(); ++block) {
+            const Block& ranges = m_blocks[block];
+            const auto begin = ranges.begin() + (block == from.block ? from.index : 0);
+            const auto it = std::partition_point(begin, ranges.end(), starts_before);
+            if (it != ranges.end()) {
+                return {block, static_cast<size_t>(it - ranges.begin())};
+            }
+        }
+        return End();
+    }
+
+    void Refresh(size_t block) {
+        m_last_upper[block] = m_blocks[block].back().upper;
+    }
+
+    void Insert(Pos at, Range range) {
+        if (m_blocks.empty()) {
+            m_blocks.emplace_back().push_back(range);
+            m_last_upper.push_back(range.upper);
+            return;
+        }
+        if (at.block == m_blocks.size()) {
+            at = {at.block - 1, m_blocks.back().size()};
+        }
+        Block& ranges = m_blocks[at.block];
+        ranges.insert(ranges.begin() + at.index, range);
+        if (ranges.size() > MaxBlock) {
+            const auto half = ranges.begin() + ranges.size() / 2;
+            Block upper_half(half, ranges.end());
+            ranges.erase(half, ranges.end());
+            m_blocks.insert(m_blocks.begin() + at.block + 1, std::move(upper_half));
+            m_last_upper.insert(m_last_upper.begin() + at.block + 1, AddressType{});
+            Refresh(at.block + 1);
+        }
+        Refresh(at.block);
+    }
+
+    /// Removes the ranges in [from, to), then the blocks this empties.
+    void Erase(Pos from, Pos to) {
+        if (from == to) {
+            return;
+        }
+        if (from.block == to.block) {
+            Block& ranges = m_blocks[from.block];
+            ranges.erase(ranges.begin() + from.index, ranges.begin() + to.index);
+            Settle(from.block, from.block + 1);
+            return;
+        }
+        if (to.block < m_blocks.size()) {
+            Block& last = m_blocks[to.block];
+            last.erase(last.begin(), last.begin() + to.index);
+        }
+        Block& first = m_blocks[from.block];
+        first.erase(first.begin() + from.index, first.end());
+        m_blocks.erase(m_blocks.begin() + from.block + 1, m_blocks.begin() + to.block);
+        m_last_upper.erase(m_last_upper.begin() + from.block + 1, m_last_upper.begin() + to.block);
+        Settle(from.block, (std::min)(from.block + 2, m_blocks.size()));
+    }
+
+    /// Drops the empty blocks among [begin, end) and refreshes the others.
+    void Settle(size_t begin, size_t end) {
+        for (size_t block = end; block-- > begin;) {
+            if (m_blocks[block].empty()) {
+                m_blocks.erase(m_blocks.begin() + block);
+                m_last_upper.erase(m_last_upper.begin() + block);
+            } else {
+                Refresh(block);
+            }
+        }
     }
 
     void Add(AddressType base_address, size_t size) {
@@ -54,24 +170,24 @@ struct RangeSet<AddressType>::RangeSetImpl {
             return;
         }
         // Ranges that touch the new one join it: the first ending at or after its start...
-        auto first = std::lower_bound(
-            m_ranges.begin(), m_ranges.end(), base_address,
-            [](const Range& range, AddressType value) { return range.upper < value; });
-        if (first == m_ranges.end()) {
-            m_ranges.push_back(Range{base_address, end_address});
+        const Pos first = FirstEnding<true>(base_address);
+        if (first == End()) {
+            Insert(first, Range{base_address, end_address});
             return;
         }
         // ...up to the first starting after its end.
-        const auto last = std::upper_bound(
-            first, m_ranges.end(), end_address,
-            [](AddressType value, const Range& range) { return value < range.lower; });
+        const Pos last = FirstStarting<false>(first, end_address);
         if (first == last) {
-            m_ranges.insert(first, Range{base_address, end_address});
+            Insert(first, Range{base_address, end_address});
             return;
         }
-        first->lower = (std::min)(first->lower, base_address);
-        first->upper = (std::max)((last - 1)->upper, end_address);
-        m_ranges.erase(first + 1, last);
+        const AddressType last_upper = At(Prev(last)).upper;
+        Range& joined = At(first);
+        joined.lower = (std::min)(joined.lower, base_address);
+        joined.upper = (std::max)(last_upper, end_address);
+        // The erase starts after `first`: its block stays where it is.
+        Erase(Next(first), last);
+        Refresh(first.block);
     }
 
     void Subtract(AddressType base_address, size_t size) {
@@ -79,40 +195,46 @@ struct RangeSet<AddressType>::RangeSetImpl {
         if (end_address <= base_address) {
             return;
         }
-        const auto first = m_ranges.begin() + (FirstEndingAfter(base_address) - m_ranges.cbegin());
-        const auto last = std::lower_bound(
-            first, m_ranges.end(), end_address,
-            [](const Range& range, AddressType value) { return range.lower < value; });
+        const Pos first = FirstEnding<false>(base_address);
+        if (first == End()) {
+            return;
+        }
+        const Pos last = FirstStarting<true>(first, end_address);
         if (first == last) {
             return;
         }
-        const AddressType left_lower = first->lower;
-        const AddressType right_upper = (last - 1)->upper;
+        const Pos last_cut = Prev(last);
+        const AddressType left_lower = At(first).lower;
+        const AddressType right_upper = At(last_cut).upper;
         const bool keep_left = left_lower < base_address;
         const bool keep_right = end_address < right_upper;
-        if (keep_left && keep_right && last - first == 1) {
+        if (keep_left && keep_right && first == last_cut) {
             // Cut out of the middle of one range: it becomes two.
-            first->upper = base_address;
-            m_ranges.insert(last, Range{end_address, right_upper});
+            At(first).upper = base_address;
+            Refresh(first.block);
+            Insert(Next(first), Range{end_address, right_upper});
             return;
         }
-        Iterator erase_from = first;
-        Iterator erase_to = last;
+        Pos erase_from = first;
+        Pos erase_to = last;
         if (keep_left) {
-            first->upper = base_address;
-            ++erase_from;
+            At(first).upper = base_address;
+            Refresh(first.block);
+            erase_from = Next(first);
         }
         if (keep_right) {
-            --erase_to;
-            erase_to->lower = end_address;
+            erase_to = last_cut;
+            At(last_cut).lower = end_address;
         }
-        m_ranges.erase(erase_from, erase_to);
+        Erase(erase_from, erase_to);
     }
 
     template <typename Func>
     void ForEach(Func&& func) const {
-        for (const Range& range : m_ranges) {
-            func(range.lower, range.upper);
+        for (const Block& ranges : m_blocks) {
+            for (const Range& range : ranges) {
+                func(range.lower, range.upper);
+            }
         }
     }
 
@@ -123,13 +245,40 @@ struct RangeSet<AddressType>::RangeSetImpl {
         if (end_address <= start_address) {
             return;
         }
-        for (auto it = FirstEndingAfter(start_address);
-             it != m_ranges.end() && it->lower < end_address; ++it) {
-            func((std::max)(it->lower, start_address), (std::min)(it->upper, end_address));
+        for (Pos pos = FirstEnding<false>(start_address); pos != End(); pos = Next(pos)) {
+            const Range& range = At(pos);
+            if (range.lower >= end_address) {
+                break;
+            }
+            func((std::max)(range.lower, start_address), (std::min)(range.upper, end_address));
         }
     }
 
-    std::vector<Range> m_ranges;
+    bool Intersects(AddressType base_address, size_t size) const {
+        if (m_blocks.empty() || size == 0) {
+            return false;
+        }
+        const AddressType end_address = base_address + static_cast<AddressType>(size);
+        const Pos pos = FirstEnding<false>(base_address);
+        return pos != End() && At(pos).lower < end_address;
+    }
+
+    void Clear() {
+        m_blocks.clear();
+        m_last_upper.clear();
+    }
+
+    void TakeFrom(RangeSetImpl& other) {
+        m_blocks = std::move(other.m_blocks);
+        m_last_upper = std::move(other.m_last_upper);
+        // A moved-from container is only "valid but unspecified". Callers hand ranges over by
+        // moving and then keep adding to the source (BufferCache::AccumulateFlushes).
+        other.Clear();
+    }
+
+    std::vector<Block> m_blocks;
+    /// Each block's last upper end, searched before the block itself.
+    std::vector<AddressType> m_last_upper;
 };
 
 template <typename AddressType>
@@ -233,17 +382,13 @@ RangeSet<AddressType>::~RangeSet() = default;
 template <typename AddressType>
 RangeSet<AddressType>::RangeSet(RangeSet&& other) {
     m_impl = std::make_unique<RangeSet<AddressType>::RangeSetImpl>();
-    m_impl->m_ranges = std::move(other.m_impl->m_ranges);
-    // A moved-from container is only "valid but unspecified". Callers hand ranges over by
-    // moving and then keep adding to the source (BufferCache::AccumulateFlushes).
-    other.m_impl->m_ranges.clear();
+    m_impl->TakeFrom(*other.m_impl);
 }
 
 template <typename AddressType>
 RangeSet<AddressType>& RangeSet<AddressType>::operator=(RangeSet&& other) {
     if (this != &other) {
-        m_impl->m_ranges = std::move(other.m_impl->m_ranges);
-        other.m_impl->m_ranges.clear();
+        m_impl->TakeFrom(*other.m_impl);
     }
     return *this;
 }
@@ -260,23 +405,17 @@ void RangeSet<AddressType>::Subtract(AddressType base_address, size_t size) {
 
 template <typename AddressType>
 void RangeSet<AddressType>::Clear() {
-    m_impl->m_ranges.clear();
+    m_impl->Clear();
 }
 
 template <typename AddressType>
 bool RangeSet<AddressType>::Empty() const {
-    return m_impl->m_ranges.empty();
+    return m_impl->m_blocks.empty();
 }
 
 template <typename AddressType>
 bool RangeSet<AddressType>::Intersects(AddressType base_address, size_t size) const {
-    const auto& ranges = m_impl->m_ranges;
-    if (ranges.empty() || size == 0) {
-        return false;
-    }
-    const AddressType end_address = base_address + static_cast<AddressType>(size);
-    const auto it = m_impl->FirstEndingAfter(base_address);
-    return it != ranges.end() && it->lower < end_address;
+    return m_impl->Intersects(base_address, size);
 }
 
 template <typename AddressType>
