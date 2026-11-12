@@ -386,7 +386,32 @@ public:
     /// Takes collected CPU writes out of the GPU-written ranges before any of them is applied:
     /// applying one downloads the GPU's bytes elsewhere on its pages (WriteMemory), which would
     /// otherwise land over the next one.
-    void ClaimCpuWrites(std::span<const std::pair<DAddr, u64>> writes);
+    /// Any range of (address, size) pairs: their size types differ between callers (std::size_t
+    /// and u64 aren't the same type everywhere). Defined here, since the renderers instantiate the
+    /// class explicitly and that leaves member templates out.
+    template <typename Writes>
+    void ClaimCpuWrites(const Writes& writes) {
+        for (const auto& [device_addr, size] : writes) {
+            if (IsRegionGpuModified(device_addr, size)) {
+                ClearDownload(device_addr, size);
+                gpu_modified_ranges.Subtract(device_addr, size);
+            }
+        }
+    }
+
+    /// Applies a batch of the GPU's own cached writes (constant buffer data). Where buffer
+    /// downloads are asynchronous, applying one downloads the GPU's bytes elsewhere on its pages
+    /// over the next ones unless they are claimed first (Lichii #1460); native titles upload the
+    /// written bytes inline instead.
+    template <typename Writes>
+    void WriteMemories(const Writes& writes) {
+        if (AsyncBufferDownloads()) {
+            ClaimCpuWrites(writes);
+        }
+        for (const auto& [device_addr, size] : writes) {
+            WriteMemory(device_addr, size);
+        }
+    }
 
     /// Return true when there are uncommitted buffers to be downloaded
     [[nodiscard]] bool HasUncommittedFlushes() const noexcept;
