@@ -42,6 +42,8 @@ add_executable(tests
     video_core/memory_tracker.cpp
     video_core/invalidation_accumulator.cpp
     video_core/syncpoint_mirror.cpp
+    video_core/nx2_gpu_mapping.cpp
+    video_core/device_memory_recycle.cpp
     video_core/texture_handles.cpp
     video_core/maxwell_fmz.cpp
     video_core/h264_packet.cpp

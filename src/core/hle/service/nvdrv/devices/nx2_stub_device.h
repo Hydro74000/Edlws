@@ -7,6 +7,7 @@
 #include <atomic>
 #include <compare>
 #include <functional>
+#include <iterator>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -30,6 +31,31 @@ inline NvResult Nx2UnknownIoctl(const char* device, Ioctl command, std::span<con
     std::fill(output.begin(), output.end(), u8{0});
     std::copy_n(input.begin(), std::min(input.size(), output.size()), output.begin());
     return NvResult::Success;
+}
+
+// Whether [start, +size) lies inside [span_start, +span_size), without overflowing near the top.
+constexpr bool Nx2RangeInside(u64 start, u64 size, u64 span_start, u64 span_size) {
+    return start >= span_start && start - span_start <= span_size &&
+           size <= span_size - (start - span_start);
+}
+
+// Erases the device ranges of `ranges` (keyed by CPU start and size) that lie inside
+// [cpu_address, +size) and passes each to `release`. A game maps parts of one memory at offsets
+// (211), so the key a range was made under is rarely the span released later; ranges that reach
+// past the span are kept.
+template <typename Ranges, typename Release>
+void Nx2EraseContainedRanges(Ranges& ranges, u64 cpu_address, u64 size, Release&& release) {
+    for (auto it = ranges.lower_bound({cpu_address, 0});
+         it != ranges.end() && it->first.first - cpu_address < size;) {
+        const auto [range_cpu, range_size] = it->first;
+        if (!Nx2RangeInside(range_cpu, range_size, cpu_address, size)) {
+            ++it;
+            continue;
+        }
+        const auto range = it->second;
+        it = ranges.erase(it);
+        release(range_cpu, range_size, range);
+    }
 }
 
 // GPU mappings a Switch 2 process made through nx2:gpu: CreateGpuAccessibleMemory (sub 101) maps
@@ -76,12 +102,50 @@ public:
         }
     }
 
+    // Memory [cpu_address, +size) is destroyed (sub 102): every GPU range that still reaches it
+    // stops reaching it, wherever it was mapped, because the game reuses the memory right after.
+    // Returns the ranges other than the one at the memory's own address, as (GPU address, size).
+    std::vector<std::pair<u64, u64>> UnmapMemory(u64 cpu_address, u64 size) {
+        std::scoped_lock lk{mutex};
+        const u64 end = cpu_address + size;
+        struct Range {
+            u64 gpu_address;
+            u64 size;
+            bool own; ///< The mapping at the memory's own address
+        };
+        std::vector<Range> ranges;
+        for (const auto& m : mappings) {
+            const u64 first = (std::max)(m.cpu_address, cpu_address);
+            const u64 last = (std::min)(m.cpu_address + m.size, end);
+            if (first < last) {
+                ranges.push_back({m.gpu_address + (first - m.cpu_address), last - first,
+                                  m.gpu_address == m.cpu_address});
+            }
+        }
+        std::vector<std::pair<u64, u64>> leftovers;
+        for (const auto& range : ranges) {
+            TrimMappings(range.gpu_address, range.size);
+            for (auto& [owner, listener] : listeners) {
+                listener.unmap(range.gpu_address, range.size);
+            }
+            if (!range.own) {
+                leftovers.emplace_back(range.gpu_address, range.size);
+            }
+        }
+        return leftovers;
+    }
+
     // Backing memory [cpu_address, +size) is about to be freed (its GPU mappings are gone): each
-    // address space drops its SMMU mapping of it, in GPU-thread order.
+    // address space drops its SMMU mappings inside it, in GPU-thread order.
     void ReleaseBacking(u64 cpu_address, u64 size) {
         {
             std::scoped_lock lk{device_mutex};
-            device_ranges.erase(cpu_address);
+            for (auto it = device_ranges.lower_bound(cpu_address);
+                 it != device_ranges.end() && it->first - cpu_address < size;) {
+                it = Nx2RangeInside(it->first, it->second.first, cpu_address, size)
+                         ? device_ranges.erase(it)
+                         : std::next(it);
+            }
         }
         std::scoped_lock lk{mutex};
         for (auto& [owner, listener] : listeners) {
