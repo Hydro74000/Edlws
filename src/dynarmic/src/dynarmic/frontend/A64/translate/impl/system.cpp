@@ -86,7 +86,17 @@ bool TranslatorVisitor::DSB(Imm<4> /*CRm*/) {
     return true;
 }
 
-bool TranslatorVisitor::DMB(Imm<4> /*CRm*/) {
+bool TranslatorVisitor::DMB(Imm<4> CRm) {
+#if defined(_M_X64) || defined(__x86_64__)
+    // DMB ISHLD and ISHST (access types 1 and 2) order loads, or stores, among themselves: x86-64
+    // already keeps that order. Full barriers stay.
+    const u32 access = CRm.ZeroExtend() & 3U;
+    if (access == 1U || access == 2U) {
+        return true;
+    }
+#else
+    (void)CRm;
+#endif
     ir.DataMemoryBarrier();
     return true;
 }
