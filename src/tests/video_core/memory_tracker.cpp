@@ -723,3 +723,32 @@ TEST_CASE("A GPU write notifies the core of its unarmed pages only", "[cpu_readb
     REQUIRE_FALSE(traps.Arm(c, PAGE * 6, collect));
     REQUIRE(parts.empty());
 }
+
+TEST_CASE("MemoryTracker: pages leave the never synchronized set for good",
+          "[video_core][ever_synchronized]") {
+    RasterizerInterface rasterizer;
+    std::optional<MemoryTracker> memory_track(rasterizer);
+    // Untouched pages are CPU-modified as created: a CPU mark there changes nothing.
+    REQUIRE(!memory_track->IsRegionEverSynchronized(c, WORD));
+    memory_track->MarkRegionAsCpuModified(c, WORD);
+    REQUIRE(!memory_track->IsRegionEverSynchronized(c, WORD));
+
+    // An upload takes pages out of the CPU-modified state.
+    memory_track->ForEachUploadRange(c + PAGE * 2, PAGE, [](u64, u64) {});
+    REQUIRE(memory_track->IsRegionEverSynchronized(c + PAGE * 2, 1));
+    REQUIRE(!memory_track->IsRegionEverSynchronized(c, PAGE * 2));
+    REQUIRE(!memory_track->IsRegionEverSynchronized(c + PAGE * 3, PAGE));
+
+    // So do GPU marks, Preflushable marks and unmarks; marking the pages CPU-modified again
+    // doesn't bring them back.
+    memory_track->MarkRegionAsGpuModified(c + PAGE * 4, PAGE);
+    memory_track->MarkRegionAsPreflushable(c + PAGE * 6, PAGE);
+    memory_track->UnmarkRegionAsCpuModified(c + PAGE * 8, PAGE);
+    memory_track->MarkRegionAsCpuModified(c, WORD);
+    for (const u64 page : {2, 4, 6, 8}) {
+        REQUIRE(memory_track->IsRegionEverSynchronized(c + PAGE * page, PAGE));
+    }
+    for (const u64 page : {0, 1, 3, 5, 7, 9}) {
+        REQUIRE(!memory_track->IsRegionEverSynchronized(c + PAGE * page, PAGE));
+    }
+}

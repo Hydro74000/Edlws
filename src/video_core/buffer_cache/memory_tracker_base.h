@@ -18,6 +18,7 @@
 #include "common/alignment.h"
 #include "common/common_types.h"
 #include "video_core/buffer_cache/word_manager.h"
+#include "video_core/page_filter.h"
 
 namespace VideoCommon {
 
@@ -81,6 +82,7 @@ public:
 
     /// Unmark region as CPU modified, notifying the device_tracker about this change
     void UnmarkRegionAsCpuModified(VAddr dirty_cpu_addr, u64 query_size) {
+        ever_synchronized_pages.Mark(dirty_cpu_addr, query_size);
         IteratePages<true>(dirty_cpu_addr, query_size, [](Manager* manager, u64 offset, size_t size) {
             manager->ChangeRegionState(Type::CPU, false, manager->cpu_addr + offset, size);
         });
@@ -88,6 +90,7 @@ public:
 
     /// Mark region as modified from the host GPU
     void MarkRegionAsGpuModified(VAddr dirty_cpu_addr, u64 query_size) noexcept {
+        ever_synchronized_pages.Mark(dirty_cpu_addr, query_size);
         IteratePages<true>(dirty_cpu_addr, query_size, [](Manager* manager, u64 offset, size_t size) {
             manager->ChangeRegionState(Type::GPU, true, manager->cpu_addr + offset, size);
         });
@@ -95,6 +98,7 @@ public:
 
     /// Mark region as modified from the host GPU
     void MarkRegionAsPreflushable(VAddr dirty_cpu_addr, u64 query_size) noexcept {
+        ever_synchronized_pages.Mark(dirty_cpu_addr, query_size);
         IteratePages<true>(dirty_cpu_addr, query_size, [](Manager* manager, u64 offset, size_t size) {
             manager->ChangeRegionState(Type::Preflushable, true, manager->cpu_addr + offset, size);
         });
@@ -159,9 +163,20 @@ public:
     /// Call 'func' for each CPU modified range and unmark those pages as CPU modified
     template <typename Func>
     void ForEachUploadRange(VAddr query_cpu_range, u64 query_size, Func&& func) {
-        IteratePages<true>(query_cpu_range, query_size, [&func](Manager* manager, u64 offset, size_t size) {
-            manager->ForEachModifiedRange(Type::CPU, true, manager->cpu_addr + offset, size, func);
+        const auto upload = [this, &func](VAddr address, u64 size) {
+            ever_synchronized_pages.Mark(address, size);
+            func(address, size);
+        };
+        IteratePages<true>(query_cpu_range, query_size, [&upload](Manager* manager, u64 offset, size_t size) {
+            manager->ForEachModifiedRange(Type::CPU, true, manager->cpu_addr + offset, size, upload);
         });
+    }
+
+    /// Whether a page of the range ever left the CPU-modified state (an upload or an unmark) or
+    /// was marked GPU-modified or Preflushable. The others are CPU-modified still, as their
+    /// managers were created, and a CPU mark changes nothing there. Any thread, without a lock.
+    [[nodiscard]] bool IsRegionEverSynchronized(VAddr query_cpu_addr, u64 query_size) const noexcept {
+        return ever_synchronized_pages.Any(query_cpu_addr, query_size);
     }
 
     /// Call 'func' for each GPU modified range and unmark those pages as GPU modified
@@ -301,6 +316,7 @@ private:
     ::Common::unordered_set<u32> cached_pages;
     std::array<std::pair<VAddr, VAddr>, 64> synchronized_ranges{};
     u64 synchronized_mask{};
+    PageFilter ever_synchronized_pages; ///< Only ever gains pages (IsRegionEverSynchronized)
     DeviceTracker* device_tracker = nullptr;
 };
 
