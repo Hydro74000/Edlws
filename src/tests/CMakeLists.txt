@@ -59,6 +59,7 @@ add_executable(tests
     video_core/nx2_semaphore_mirror.cpp
     video_core/nx2_written_pages.cpp
     video_core/memory_manager_ranges.cpp
+    video_core/maxwell_cb_words.cpp
     video_core/uniform_stream_reuse.cpp
     video_core/usage_tracker.cpp
     video_core/shader_invalidation.cpp

@@ -3269,6 +3269,12 @@ public:
     void ProcessCBData(u32 value);
     void ProcessCBMultiData(const u32* start_base, u32 amount);
 
+    /// GpuSplit's back: a row of single constant buffer data writes (macros write them one by
+    /// one) as CallMethod would run them, with one memory write. Word by word where CallMethod
+    /// does more than that or ProcessCBMultiData would clip.
+    void CallConstBufferWords(Core::System& system, const u32* methods, const u32* arguments,
+                              u32 count);
+
     void ProcessInlineIndexMultiData(u32 method, const u32* start_base, u32 amount);
 
 private:
