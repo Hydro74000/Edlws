@@ -91,6 +91,34 @@ vk::Buffer CreateBuffer(const Device& device, const MemoryAllocator& memory_allo
     return memory_allocator.CreateBuffer(
         buffer_ci, device.IsMoltenVK() ? MemoryUsage::Stream : MemoryUsage::DeviceLocal);
 }
+
+/// Records vkCmdBindVertexBuffers(2) with arrays of N entries: the command lambda used to carry the
+/// four 32-entry arrays of HostBindings (about 1.3 KiB per bind), and most draws bind a few.
+template <size_t N>
+void RecordVertexBuffers(Scheduler& scheduler, bool extended, u32 first, u32 count,
+                         const VkBuffer* handles, const u64* offsets, const u64* sizes,
+                         const u64* strides) {
+    struct Arrays {
+        std::array<VkBuffer, N> handles;
+        std::array<VkDeviceSize, N> offsets;
+        std::array<VkDeviceSize, N> sizes;
+        std::array<VkDeviceSize, N> strides;
+    } arrays{};
+    std::copy_n(handles, count, arrays.handles.begin());
+    std::copy_n(offsets, count, arrays.offsets.begin());
+    if (extended) {
+        std::copy_n(sizes, count, arrays.sizes.begin());
+        std::copy_n(strides, count, arrays.strides.begin());
+        scheduler.Record([arrays, first, count](vk::CommandBuffer cmdbuf) {
+            cmdbuf.BindVertexBuffers2EXT(first, count, arrays.handles.data(), arrays.offsets.data(),
+                                         arrays.sizes.data(), arrays.strides.data());
+        });
+    } else {
+        scheduler.Record([arrays, first, count](vk::CommandBuffer cmdbuf) {
+            cmdbuf.BindVertexBuffers(first, count, arrays.handles.data(), arrays.offsets.data());
+        });
+    }
+}
 } // Anonymous namespace
 
 Buffer::Buffer(BufferCacheRuntime& runtime, VideoCommon::NullBufferParams null_params)
@@ -763,14 +791,20 @@ void BufferCacheRuntime::BindVertexBuffers(VideoCommon::HostBindings<Buffer>& bi
     if (binding_count == 0) {
         return;
     }
-    if (device.IsExtExtendedDynamicStateSupported()) {
-        scheduler.Record([bindings_ = std::move(bindings), buffer_handles_ = std::move(buffer_handles), binding_count](vk::CommandBuffer cmdbuf) {
-            cmdbuf.BindVertexBuffers2EXT(bindings_.min_index, binding_count, buffer_handles_.data(), bindings_.offsets.data(), bindings_.sizes.data(), bindings_.strides.data());
-        });
+    const bool extended = device.IsExtExtendedDynamicStateSupported();
+    const auto record = [&]<size_t N>() {
+        RecordVertexBuffers<N>(scheduler, extended, bindings.min_index, binding_count,
+                               buffer_handles.data(), bindings.offsets.data(),
+                               bindings.sizes.data(), bindings.strides.data());
+    };
+    if (binding_count <= 2) {
+        record.template operator()<2>();
+    } else if (binding_count <= 4) {
+        record.template operator()<4>();
+    } else if (binding_count <= 8) {
+        record.template operator()<8>();
     } else {
-        scheduler.Record([bindings_ = std::move(bindings), buffer_handles_ = std::move(buffer_handles), binding_count](vk::CommandBuffer cmdbuf) {
-            cmdbuf.BindVertexBuffers(bindings_.min_index, binding_count, buffer_handles_.data(), bindings_.offsets.data());
-        });
+        record.template operator()<VideoCommon::NUM_VERTEX_BUFFERS>();
     }
 }
 
