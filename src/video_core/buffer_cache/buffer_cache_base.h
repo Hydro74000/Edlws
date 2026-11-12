@@ -615,6 +615,27 @@ private:
                                                bool native_pointer = false,
                                                bool table_pointer = false) const;
 
+    /// A storage binding of the same range as the slot's previous one keeps the buffer found for
+    /// it: DeleteBuffer clears the ids it frees in every channel's bindings.
+    [[nodiscard]] static Binding KeepStorageBuffer(const Binding& previous,
+                                                   Binding binding) noexcept {
+        if (previous.buffer_id && previous.buffer_id != NULL_BUFFER_ID &&
+            binding.device_addr == previous.device_addr && binding.size == previous.size) {
+            binding.buffer_id = previous.buffer_id;
+        }
+        return binding;
+    }
+
+    /// Finds the buffer of a storage binding that has none yet (FindBuffer's write wait included
+    /// for one it kept).
+    void ResolveStorageBuffer(Binding& binding) {
+        if (!binding.buffer_id) {
+            binding.buffer_id = FindBuffer(binding.device_addr, binding.size, false);
+        } else if (binding.buffer_id != NULL_BUFFER_ID && Settings::IsGPUFenceBehaviorAccurate()) {
+            SynchronizeBufferWrites(slot_buffers[binding.buffer_id]);
+        }
+    }
+
     /// The binding of the storage buffer at gpu_addr: what StorageBufferBinding reads from guest
     /// memory (the pointer, and for NVN sizes the word after it) is given, the rest depends on
     /// the page tables only.

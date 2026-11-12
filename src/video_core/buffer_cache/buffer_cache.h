@@ -613,11 +613,12 @@ bool BufferCache<P>::BindGraphicsStorageBuffer(size_t stage, size_t ssbo_index, 
         }
         ssbo_addr = holder + indirect_offset;
     }
-    channel_state->storage_buffers[stage][ssbo_index] =
-        StorageBufferBinding(ssbo_addr, cbuf_index, is_written,
-                             maxwell3d->GetNativeMacroEngine().native_turing,
-                             indirect_offset != ~0U);
-    return (channel_state->storage_buffers[stage][ssbo_index].buffer_id != NULL_BUFFER_ID);
+    Binding& slot = channel_state->storage_buffers[stage][ssbo_index];
+    const bool native = maxwell3d->GetNativeMacroEngine().native_turing;
+    const bool table = indirect_offset != ~0U;
+    slot = KeepStorageBuffer(slot,
+                             StorageBufferBinding(ssbo_addr, cbuf_index, is_written, native, table));
+    return slot.buffer_id != NULL_BUFFER_ID;
 }
 
 template <class P>
@@ -692,9 +693,10 @@ void BufferCache<P>::BindComputeStorageBuffer(size_t ssbo_index, u32 cbuf_index,
         }
         ssbo_addr = holder + indirect_offset;
     }
-    channel_state->compute_storage_buffers[ssbo_index] =
-        StorageBufferBinding(ssbo_addr, cbuf_index, is_written, kepler_compute->IsNativeMode(),
-                             indirect_offset != ~0U);
+    Binding& slot = channel_state->compute_storage_buffers[ssbo_index];
+    slot = KeepStorageBuffer(slot, StorageBufferBinding(ssbo_addr, cbuf_index, is_written,
+                                                        kepler_compute->IsNativeMode(),
+                                                        indirect_offset != ~0U));
 }
 
 template <class P>
@@ -1743,8 +1745,7 @@ void BufferCache<P>::UpdateStorageBuffers(size_t stage) {
     ForEachEnabledBit(channel_state->enabled_storage_buffers[stage], [&](u32 index) {
         // Resolve buffer
         Binding& binding = channel_state->storage_buffers[stage][index];
-        const BufferId buffer_id = FindBuffer(binding.device_addr, binding.size, false);
-        binding.buffer_id = buffer_id;
+        ResolveStorageBuffer(binding);
         const bool is_written = ((channel_state->written_storage_buffers[stage] >> index) & 1) != 0;
         ResolveMultiRangeStorage(binding, is_written, graphics_segments);
     });
@@ -1812,7 +1813,7 @@ void BufferCache<P>::UpdateComputeStorageBuffers() {
     ForEachEnabledBit(channel_state->enabled_compute_storage_buffers, [&](u32 index) {
         // Resolve buffer
         Binding& binding = channel_state->compute_storage_buffers[index];
-        binding.buffer_id = FindBuffer(binding.device_addr, binding.size, false);
+        ResolveStorageBuffer(binding);
         const bool is_written =
             ((channel_state->written_compute_storage_buffers >> index) & 1) != 0;
         ResolveMultiRangeStorage(binding, is_written, compute_segments);
