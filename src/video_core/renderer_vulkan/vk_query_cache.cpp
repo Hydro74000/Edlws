@@ -24,6 +24,7 @@
 #include "video_core/renderer_vulkan/vk_buffer_cache.h"
 #include "video_core/renderer_vulkan/vk_compute_pass.h"
 #include "video_core/renderer_vulkan/vk_query_cache.h"
+#include "video_core/renderer_vulkan/vk_query_copy.h"
 #include "video_core/renderer_vulkan/vk_resource_pool.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_staging_buffer_pool.h"
@@ -1734,6 +1735,12 @@ void QueryCacheRuntime::SyncValues(std::span<SyncValuesType> values, VkBuffer ba
             });
         }
         src_buffer = base_src_buffer;
+    }
+
+    for (auto& copies : impl->copies_setup) {
+        if (copies.size() > 1) {
+            copies = NonOverlappingQueryCopies(copies);
+        }
     }
 
     impl->scheduler.RequestOutsideRenderPassOperationContext();
