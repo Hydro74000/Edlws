@@ -37,6 +37,7 @@
 #include "core/file_sys/vfs/vfs_concat.h"
 #include "core/file_sys/vfs/vfs_real.h"
 #include "core/gpu_dirty_memory_manager.h"
+#include "core/hle/kernel/board/nintendo/nx/k_system_control.h"
 #include "core/hle/kernel/k_memory_manager.h"
 #include "core/hle/kernel/k_process.h"
 #include "core/hle/kernel/k_resource_limit.h"
@@ -189,7 +190,6 @@ struct System::Impl {
         device_memory.emplace();
 
         is_multicore = Settings::values.use_multi_core.GetValue();
-        extended_memory_layout = Settings::values.memory_layout_mode.GetValue() != Settings::MemoryLayout::Memory_4Gb;
 
         core_timing.SetMulticore(is_multicore);
         core_timing.Initialize([&system]() { system.RegisterHostThread(); });
@@ -213,23 +213,18 @@ struct System::Impl {
     }
 
     void ReinitializeIfNecessary(System& system) {
-        const bool must_reinitialize =
-            !device_memory.has_value() ||
-            is_multicore != Settings::values.use_multi_core.GetValue() ||
-            extended_memory_layout != (Settings::values.memory_layout_mode.GetValue() !=
-                                       Settings::MemoryLayout::Memory_4Gb);
-
-        if (!must_reinitialize) {
+        if (is_multicore != Settings::values.use_multi_core.GetValue()) {
+            LOG_DEBUG(Kernel, "Re-initializing");
+            Initialize(system);
             return;
         }
-
-        LOG_DEBUG(Kernel, "Re-initializing");
-
-        is_multicore = Settings::values.use_multi_core.GetValue();
-        extended_memory_layout =
-            Settings::values.memory_layout_mode.GetValue() != Settings::MemoryLayout::Memory_4Gb;
-
-        Initialize(system);
+        // The guest RAM is sized for the memory layout of the program to load: telling 4 GiB from
+        // extended is not enough (a Switch 2 game takes 12 GiB whatever the setting).
+        if (!device_memory.has_value() ||
+            device_memory->buffer.BackingSize() !=
+                Kernel::Board::Nintendo::Nx::KSystemControl::Init::GetIntendedMemorySize()) {
+            device_memory.emplace();
+        }
     }
 
     void RefreshTime(System& system) {
@@ -626,7 +621,6 @@ struct System::Impl {
     std::atomic_bool is_shutting_down{};
     std::atomic_bool is_powered_on{};
     bool is_multicore : 1 = false;
-    bool extended_memory_layout : 1 = false;
     // Not bit-fields: service, NVDEC and frontend threads set them, and a bit-field store
     // rewrites the byte the others share.
     std::atomic_bool exit_locked{};
