@@ -221,6 +221,13 @@ void EmitIsbeWriteMapU32(EmitContext& ctx, const IR::Value& address, Id value) {
 }
 
 void EmitMeshPrologue(EmitContext& ctx) {
+    if (ctx.stage == Stage::Task) {
+        // A task that culls all its threads never writes the mesh workgroup count, and the payload
+        // starts undefined: launching that many mesh workgroups loses the device.
+        ctx.OpStore(PayloadWord(ctx, ctx.Const(1U)), ctx.u32_zero_value);
+        Barrier(ctx);
+        return;
+    }
     if (ctx.stage != Stage::Mesh) {
         return;
     }
