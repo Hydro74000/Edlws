@@ -220,6 +220,7 @@ struct System::Impl {
         }
         // The guest RAM is sized for the memory layout of the program to load: telling 4 GiB from
         // extended is not enough (a Switch 2 game takes 12 GiB whatever the setting).
+        // ShutdownMainProcess releases it.
         if (!device_memory.has_value() ||
             device_memory->buffer.BackingSize() !=
                 Kernel::Board::Nintendo::Nx::KSystemControl::Init::GetIntendedMemorySize()) {
@@ -537,6 +538,10 @@ struct System::Impl {
 
         // Reset all glue registrations
         arp_manager.ResetAll();
+
+        // The guest RAM keeps every page the game touched until it is destroyed (up to 12 GiB),
+        // and nothing uses it until the next game: InitializeKernel creates it again.
+        device_memory.reset();
 
         LOG_DEBUG(Core, "Shutdown OK");
     }
