@@ -45,6 +45,8 @@ public:
 
     std::bitset<(std::numeric_limits<u16>::max)()> execution_mask{};
     std::vector<std::pair<u32, u32>> method_sink{};
+    /// Set by Maxwell3D: GpuSplit's back calls it without the virtual call.
+    bool is_maxwell3d{};
     GPUVAddr current_dma_segment;
     bool current_dirty{};
 protected:

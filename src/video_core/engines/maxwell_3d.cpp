@@ -22,6 +22,7 @@
 #include "video_core/gpu.h"
 #include "video_core/gpu_split.h"
 #include "video_core/memory_manager.h"
+#include "video_core/nx2.h"
 #include "video_core/nx2_profile.h"
 #include "video_core/rasterizer_interface.h"
 #include "video_core/textures/texture.h"
@@ -44,6 +45,7 @@ Maxwell3D::Maxwell3D(MemoryManager& memory_manager_)
 #endif
     , upload_state{memory_manager, regs.upload}
 {
+    is_maxwell3d = true;
     dirty.flags.flip();
     InitializeRegisterDefaults();
     execution_mask.reset();
@@ -795,6 +797,38 @@ void Maxwell3D::ProcessCBMultiData(const u32* start_base, u32 amount) {
 
 void Maxwell3D::ProcessCBData(u32 value) {
     ProcessCBMultiData(&value, 1);
+}
+
+void Maxwell3D::CallConstBufferWords(Core::System& system, const u32* methods,
+                                     const u32* arguments, u32 count) {
+    const u32 offset = regs.const_buffer.offset;
+    const u64 bytes = u64{count} * sizeof(u32);
+    const GPUVAddr address = regs.const_buffer.Address();
+    const GPUVAddr write_address = address + offset;
+    // Word by word where CallMethod does more than below (a macro collecting its parameters, the
+    // write history, the first-write trace, the profile counters), where ProcessCBMultiData would
+    // drop words past the end of the buffer, and on Switch 2 sparse memory.
+    const bool word_by_word =
+        count > 64 || executing_macro != 0 || record_write_history ||
+        g_trace_first_method_writes || VideoCommon::Nx2Profile::Enabled() || address == 0 ||
+        offset > regs.const_buffer.size || bytes > regs.const_buffer.size - offset ||
+        (write_address + bytes > Tegra::g_nx2_sparse_low.load(std::memory_order_relaxed) &&
+         write_address < Tegra::g_nx2_sparse_high.load(std::memory_order_relaxed));
+    if (word_by_word) {
+        for (u32 i = 0; i < count; ++i) {
+            CallMethod(system, methods[i], arguments[i], true);
+        }
+        return;
+    }
+    // As CallMethod for each word (the first may issue a deferred draw, before any upload), then
+    // the words ProcessCBData would have written one after the other.
+    std::array<u32, 64> values;
+    for (u32 i = 0; i < count; ++i) {
+        values[i] = ProcessShadowRam(methods[i], arguments[i]);
+        ProcessDirtyRegisters(methods[i], values[i]);
+    }
+    memory_manager.WriteBlockCached(write_address, values.data(), bytes);
+    regs.const_buffer.offset += static_cast<u32>(bytes);
 }
 
 void Maxwell3D::ProcessInlineIndexMultiData(u32 method, const u32* start_base, u32 amount) {

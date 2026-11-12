@@ -20,6 +20,7 @@ class System;
 
 namespace Tegra::Engines {
 class EngineInterface;
+class Maxwell3D;
 }
 
 namespace VideoCommon {
@@ -232,7 +233,10 @@ private:
     bool WaitFor(u64 target, const char* what, const std::source_location& where);
 
     void BackLoop(std::stop_token stop_token);
-    size_t Execute(const u64* entry);
+    /// Runs the entry at `entry`, of the `words` published before the ring's end; returns its size.
+    size_t Execute(const u64* entry, size_t words);
+    /// Execute's method entries for the 3D engine, without the virtual calls.
+    size_t ExecuteMaxwell3D(const u64* entry, size_t words, Tegra::Engines::Maxwell3D& maxwell3d);
 
     Core::System* system{};
     bool active{};
