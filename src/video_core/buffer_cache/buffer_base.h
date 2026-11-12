@@ -117,6 +117,16 @@ public:
         lru_id = lru_id_;
     }
 
+    /// The frame BufferCache last touched this buffer's LRU entry in (touching it again in that
+    /// frame changes nothing), so that a draw's bindings don't each visit the LRU's nodes.
+    u64 LruFrame() const noexcept {
+        return lru_frame;
+    }
+
+    void SetLruFrame(u64 frame) noexcept {
+        lru_frame = frame;
+    }
+
     size_t SizeBytes() const {
         return size_bytes;
     }
@@ -134,6 +144,7 @@ private:
     BufferFlagBits flags{};
     int stream_score = 0;
     size_t lru_id = SIZE_MAX;
+    u64 lru_frame = ~u64{0};
     size_t size_bytes = 0;
     u64 write_tick = 0;
 };

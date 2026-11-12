@@ -2300,7 +2300,8 @@ void BufferCache<P>::ChangeRegister(BufferId buffer_id) {
 
 template <class P>
 void BufferCache<P>::TouchBuffer(Buffer& buffer, BufferId buffer_id) noexcept {
-    if (buffer_id != NULL_BUFFER_ID) {
+    if (buffer_id != NULL_BUFFER_ID && buffer.LruFrame() != frame_tick) {
+        buffer.SetLruFrame(frame_tick);
         lru_cache.Touch(buffer.getLRUID(), frame_tick);
     }
 }
