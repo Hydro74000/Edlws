@@ -1292,7 +1292,7 @@ void BufferCache<P>::ResolveMultiRangeStorage(Binding& binding, bool is_written,
     binding.segment_first = 0;
     binding.segment_count = 0;
     if constexpr (requires { runtime.BindMultiRangeStorageBuffer(u64{}, bool{}); }) {
-        if (binding.gpu_addr == 0 || binding.size == 0) {
+        if (binding.one_range || binding.gpu_addr == 0 || binding.size == 0) {
             return;
         }
         if (is_written && !runtime.PrefersSparseSources()) {
@@ -2834,11 +2834,14 @@ Binding BufferCache<P>::ResolveStorageBinding(GPUVAddr gpu_addr, u64 next_qword,
     if (is_written) {
         binding_size = aligned_size;
     }
+    // A mapped size stops where the device range does: the aligned start lies on the same page
+    // (alignments are below a page) and the end is rounded up within the last one.
     const Binding binding{
         .device_addr = *aligned_device_addr,
         .gpu_addr = aligned_gpu_addr,
         .size = binding_size,
         .buffer_id = BufferId{},
+        .one_range = mapped_size,
     };
     return binding;
 }

@@ -94,6 +94,7 @@ struct Binding {
     BufferId buffer_id;
     u32 segment_first{};
     u32 segment_count{};
+    bool one_range{}; ///< Sized to one device range already (MaxContinuousRange)
 };
 
 struct MultiRangeSegment {
