@@ -752,3 +752,32 @@ TEST_CASE("MemoryTracker: pages leave the never synchronized set for good",
         REQUIRE(!memory_track->IsRegionEverSynchronized(c + PAGE * page, PAGE));
     }
 }
+
+TEST_CASE("MemoryTracker: Deferred page caching untracks later and tracks at once",
+          "[video_core]") {
+    RasterizerInterface rasterizer;
+    std::optional<MemoryTracker> memory_track(rasterizer);
+    memory_track->UnmarkRegionAsCpuModified(c, WORD);
+    REQUIRE(rasterizer.Count(c + PAGE) == 1);
+
+    VideoCommon::DeferredPageCaching deferred;
+    VideoCommon::t_deferred_page_caching = &deferred;
+    memory_track->MarkRegionAsCpuModified(c + PAGE, PAGE);
+    memory_track->UnmarkRegionAsCpuModified(c + PAGE, PAGE);
+    memory_track->MarkRegionAsCpuModified(c + PAGE * 3, PAGE);
+    VideoCommon::t_deferred_page_caching = nullptr;
+
+    // The words change at once; the tracker hears of the untracking only when the thread applies
+    // it. Tracking a page again applies at once, so the page stays protected throughout.
+    REQUIRE_FALSE(deferred.Empty());
+    REQUIRE(memory_track->ModifiedCpuRegion(c, WORD) == Range{c + PAGE * 3, c + PAGE * 4});
+    REQUIRE(rasterizer.Count(c + PAGE) == 2);
+    REQUIRE(rasterizer.Count(c + PAGE * 3) == 1);
+
+    deferred.ApplyAll();
+    REQUIRE(deferred.Empty());
+    REQUIRE(rasterizer.Count(c + PAGE) == 1);
+    REQUIRE(rasterizer.Count(c + PAGE * 3) == 0);
+    deferred.ApplyAll();
+    REQUIRE(rasterizer.Count(c + PAGE * 3) == 0);
+}

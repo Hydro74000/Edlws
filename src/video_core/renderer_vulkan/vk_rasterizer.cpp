@@ -1326,8 +1326,34 @@ void RasterizerVulkan::InnerInvalidation(std::span<const std::pair<DAddr, std::s
 bool RasterizerVulkan::OnCPUWrite(DAddr addr, u64 size) {
     DEBUG_ASSERT(addr != 0 || size != 0);
     {
-        std::scoped_lock lock{buffer_cache.mutex};
-        if (buffer_cache.OnCPUWrite(addr, size)) {
+        // The pages the write untracks change their host protection after the lock is dropped:
+        // the cores held it 20 to 40 ms a second in those system calls (Mario Kart World, Donkey
+        // Kong Bananza), and the GPU back waits for it before every draw. A write that traps on a
+        // page still protected until then finds it untracked and changes nothing. Off the
+        // scheduler's owner a write only untracks pages (WriteMemory uploads only on the owner).
+        // Device unmaps wait for these changes, as one applied to an unmapped page is lost.
+        static thread_local VideoCommon::DeferredPageCaching deferred;
+        const bool defer = VideoCommon::t_deferred_page_caching == nullptr &&
+                           !VideoCommon::GpuSplit::OwnsScheduler();
+        bool gpu_modified;
+        {
+            std::scoped_lock lock{buffer_cache.mutex};
+            if (defer) {
+                VideoCommon::t_deferred_page_caching = &deferred;
+            }
+            gpu_modified = buffer_cache.OnCPUWrite(addr, size);
+            if (defer) {
+                VideoCommon::t_deferred_page_caching = nullptr;
+                if (!deferred.Empty()) {
+                    device_memory.BeginDeferredCachedUpdates();
+                }
+            }
+        }
+        if (defer && !deferred.Empty()) {
+            deferred.ApplyAll();
+            device_memory.EndDeferredCachedUpdates();
+        }
+        if (gpu_modified) {
             return true;
         }
     }

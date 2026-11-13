@@ -36,6 +36,50 @@ enum class Type {
     Max
 };
 
+/// Page untracking a thread applies itself once it drops the buffer cache's lock
+/// (RasterizerVulkan::OnCPUWrite): changing a page's host protection is a system call, and the
+/// GPU back waited for it before drawing. Only untracking waits: a page protected a little longer
+/// traps a write that then finds it untracked, but a page tracked late would let a write through
+/// unseen.
+class DeferredPageCaching {
+public:
+    using Ranges = std::span<const std::pair<VAddr, size_t>>;
+    using Apply = void (*)(void* tracker, Ranges ranges, s32 delta);
+
+    void Add(void* tracker, Apply apply, Ranges ranges, s32 delta) {
+        batches.push_back(Batch{tracker, apply, delta, collected.size(), ranges.size()});
+        collected.insert(collected.end(), ranges.begin(), ranges.end());
+    }
+
+    /// In the order they were made.
+    void ApplyAll() {
+        for (const Batch& batch : batches) {
+            batch.apply(batch.tracker, Ranges(collected).subspan(batch.begin, batch.count),
+                        batch.delta);
+        }
+        batches.clear();
+        collected.clear();
+    }
+
+    [[nodiscard]] bool Empty() const {
+        return batches.empty();
+    }
+
+private:
+    struct Batch {
+        void* tracker;
+        Apply apply;
+        s32 delta;
+        size_t begin;
+        size_t count;
+    };
+    std::vector<Batch> batches;
+    std::vector<std::pair<VAddr, size_t>> collected;
+};
+
+/// Set while the calling thread collects its page untracking instead of applying it.
+inline thread_local DeferredPageCaching* t_deferred_page_caching{};
+
 template <class DeviceTracker, size_t stack_words, size_t size_bytes>
 struct WordManager {
     static constexpr size_t num_words = Common::DivCeil(size_bytes, BYTES_PER_WORD);
@@ -296,8 +340,20 @@ struct WordManager {
     void ApplyCollectedRanges(RangeBatch& ranges, int delta) const {
         if (ranges.empty())
             return;
-        tracker->UpdatePagesCachedBatch(
-            std::span<const std::pair<VAddr, size_t>>(ranges.data(), ranges.size()), delta);
+        const std::span<const std::pair<VAddr, size_t>> runs(ranges.data(), ranges.size());
+        // Tracking (+1) never waits: only untracking may be applied after the lock is dropped.
+        if (t_deferred_page_caching != nullptr && delta < 0) {
+            t_deferred_page_caching->Add(
+                tracker,
+                [](void* deferred_tracker, DeferredPageCaching::Ranges deferred_runs, s32 run_delta) {
+                    static_cast<DeviceTracker*>(deferred_tracker)
+                        ->UpdatePagesCachedBatch(deferred_runs, run_delta);
+                },
+                runs, delta);
+            ranges.clear();
+            return;
+        }
+        tracker->UpdatePagesCachedBatch(runs, delta);
         ranges.clear();
     }
 
