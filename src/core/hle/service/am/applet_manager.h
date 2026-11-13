@@ -49,6 +49,10 @@ public:
 
 public:
     void SetWindowSystem(WindowSystem* window_system);
+
+    /// The emulation stops: an application process no window system took yet goes now, while
+    /// the kernel that owns it is still up.
+    void DropPendingProcess();
     [[nodiscard]] WindowSystem* GetWindowSystem() const { return m_window_system; }
 
 private:

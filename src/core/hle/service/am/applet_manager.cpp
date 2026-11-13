@@ -260,6 +260,11 @@ void AppletManager::OperationModeChanged() {
     m_window_system->OnOperationModeChanged();
 }
 
+void AppletManager::DropPendingProcess() {
+    std::scoped_lock lk{m_lock};
+    m_pending_process.reset();
+}
+
 void AppletManager::SetWindowSystem(WindowSystem* window_system) {
     std::unique_lock lk{m_lock};
 

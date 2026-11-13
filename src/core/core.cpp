@@ -536,6 +536,8 @@ struct System::Impl {
         kernel.SuspendEmulation(true);
         kernel.CloseServices();
         kernel.ShutdownCores();
+        // Stopped before the window system took it (during loading): it would outlive the kernel.
+        applet_manager.DropPendingProcess();
         services.reset();
         service_manager.reset();
         fs_controller.Reset();
