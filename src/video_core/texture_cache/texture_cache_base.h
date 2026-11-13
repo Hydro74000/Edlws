@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <deque>
 #include <limits>
@@ -328,6 +329,12 @@ public:
     /// Update bound render targets and upload memory if necessary
     /// @param is_clear True when the render targets are being used for clears
     void UpdateRenderTargets(bool is_clear);
+
+    /// Whether every render target the current registers draw to is drawn again regularly: in at
+    /// least 3 frames of a run in which it never went more than 4 frames without being drawn, the
+    /// last of them at most 4 frames ago. GPU thread only, without the lock: it reads the
+    /// registers and a history UpdateRenderTargets keeps on the same thread.
+    [[nodiscard]] bool RenderTargetsDrawnRegularly() const;
 
     /// Find a framebuffer with the currently bound render targets
     /// UpdateRenderTargets should be called before this
@@ -696,6 +703,19 @@ private:
 
     u64 modification_tick = 0;
     u64 frame_tick = 0;
+
+    /// When each render target address was drawn to (GPU thread only): the current run of frames
+    /// it was drawn in, a run ending when it goes more than TargetMaxGap frames without a draw.
+    struct TargetRun {
+        u64 first_frame;
+        u64 last_frame;
+        u32 frames; ///< Frames of the run it was drawn in
+    };
+    static constexpr u64 TargetMaxGap = 4;
+    void NoteRenderTargets();
+    std::unordered_map<GPUVAddr, TargetRun> target_runs;
+    u64 targets_noted_frame = ~u64{0};
+    u64 target_runs_pruned_frame = 0;
 
     Common::ThreadWorker texture_decode_worker{1, "TextureDecoder", {},
                                                Common::ThreadPlacement::Efficiency};

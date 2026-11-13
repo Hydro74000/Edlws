@@ -997,6 +997,65 @@ bool TextureCache<P>::RescaleRenderTargets() {
     return rescaled;
 }
 
+namespace Detail {
+/// Calls func with the address of each render target the registers draw to, as FindColorBuffer
+/// and FindDepthBuffer find them.
+template <typename Regs, typename Func>
+void ForEachDrawTargetAddress(const Regs& regs, Func&& func) {
+    for (u32 index = 0; index < regs.rt_control.count && index < regs.rt.size(); ++index) {
+        const auto& rt = regs.rt[index];
+        if (rt.Address() != 0 && rt.format != Tegra::RenderTargetFormat::NONE) {
+            func(rt.Address());
+        }
+    }
+    if (regs.zeta_enable && regs.zeta.Address() != 0) {
+        func(regs.zeta.Address());
+    }
+}
+} // namespace Detail
+
+template <class P>
+void TextureCache<P>::NoteRenderTargets() {
+    targets_noted_frame = frame_tick;
+    Detail::ForEachDrawTargetAddress(maxwell3d->regs, [this](GPUVAddr address) {
+        const auto [it, inserted] = target_runs.try_emplace(address, TargetRun{frame_tick, frame_tick, 1});
+        TargetRun& run = it->second;
+        if (inserted || run.last_frame == frame_tick) {
+            return;
+        }
+        if (frame_tick - run.last_frame > TargetMaxGap) {
+            run = {frame_tick, frame_tick, 1};
+        } else {
+            ++run.frames;
+            run.last_frame = frame_tick;
+        }
+    });
+    // Addresses not drawn to for a while (released images, a level left) go.
+    if (frame_tick - target_runs_pruned_frame >= 600) {
+        target_runs_pruned_frame = frame_tick;
+        std::erase_if(target_runs, [this](const auto& entry) {
+            return frame_tick - entry.second.last_frame > 600;
+        });
+    }
+}
+
+template <class P>
+bool TextureCache<P>::RenderTargetsDrawnRegularly() const {
+    // Drawn in 3 frames of a run: rotating targets (presentation images, history buffers drawn
+    // every other frame) count, as the hole a skipped draw leaves is redrawn within a few frames.
+    constexpr u32 MinFrames = 3;
+    bool regular = true;
+    bool any_target = false;
+    Detail::ForEachDrawTargetAddress(maxwell3d->regs, [&](GPUVAddr address) {
+        any_target = true;
+        const auto it = target_runs.find(address);
+        regular = regular && it != target_runs.end() && it->second.frames >= MinFrames &&
+                  frame_tick - it->second.last_frame <= TargetMaxGap;
+    });
+    // A draw with no target renders nothing a later frame redraws (queries, rasterizer discard).
+    return any_target && regular;
+}
+
 template <class P>
 void TextureCache<P>::UpdateRenderTargets(bool is_clear) {
     using namespace VideoCommon::Dirty;
@@ -1015,8 +1074,12 @@ void TextureCache<P>::UpdateRenderTargets(bool is_clear) {
         }
         const ImageViewId depth_buffer_id = render_targets.depth_buffer_id;
         PrepareImageView(depth_buffer_id, true, is_clear && IsFullClear(depth_buffer_id));
+        if (targets_noted_frame != frame_tick) {
+            NoteRenderTargets();
+        }
         return;
     }
+    NoteRenderTargets();
 
     const VideoCommon::RenderTargets previous_render_targets = render_targets;
     const bool rescaled = RescaleRenderTargets();
