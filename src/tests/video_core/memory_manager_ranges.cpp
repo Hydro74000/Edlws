@@ -2,7 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <optional>
+#include <thread>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -78,4 +81,26 @@ TEST_CASE("MaxContinuousRange answers like a page walk, before and after a remap
     gpu.Unmap(Base + 0x40000, 0x2000);
     gpu.Map(Base + 0x80000, 0x180000, 0x80000, Tegra::PTEKind::PITCH, false);
     REQUIRE(AllAnswersMatch(gpu));
+}
+
+TEST_CASE("Device unmaps wait for deferred page count changes", "[video_core][memory_manager]") {
+    ScopedSystemTestContext context;
+    Core::System system;
+    Core::DeviceMemory physical;
+    Tegra::MaxwellDeviceMemoryManager device{physical};
+    Tegra::GPU host_gpu{system, false, false};
+    Null::RasterizerNull rasterizer{host_gpu};
+    device.BindInterface(&rasterizer);
+
+    device.BeginDeferredCachedUpdates();
+    std::atomic<bool> unmapped{};
+    std::thread unmapper{[&] {
+        device.Unmap(0x10000, 0x1000);
+        unmapped = true;
+    }};
+    std::this_thread::sleep_for(std::chrono::milliseconds{20});
+    CHECK_FALSE(unmapped);
+    device.EndDeferredCachedUpdates();
+    unmapper.join();
+    REQUIRE(unmapped);
 }
