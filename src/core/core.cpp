@@ -368,6 +368,10 @@ struct System::Impl {
     }
 
     SystemResultStatus Load(System& system, Frontend::EmuWindow& emu_window, const std::string& filepath, Service::AM::FrontendAppletParameters& params) {
+        // ShutdownMainProcess of the previous game left this set, and only the Android frontend
+        // cleared it: the audio renderer and sinks of a game started after a stop saw a shutdown
+        // and stayed silent.
+        SetShuttingDown(false);
         if (params.launch_type == Service::AM::LaunchType::FrontendInitiated) {
             fs_controller.InitTempStorage();
         }
