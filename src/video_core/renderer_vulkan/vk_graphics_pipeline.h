@@ -161,6 +161,11 @@ public:
         return is_built.load(std::memory_order::acquire);
     }
 
+    /// Whether a stage writes storage buffers, storage images or global memory.
+    [[nodiscard]] bool WritesStorage() const noexcept {
+        return writes_storage;
+    }
+
     template <typename Spec>
     static auto MakeConfigureSpecFunc() {
         return [](GraphicsPipeline* pl, bool is_indexed) { return pl->ConfigureImpl<Spec>(is_indexed); };

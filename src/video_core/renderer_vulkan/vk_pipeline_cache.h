@@ -154,8 +154,8 @@ private:
 
     [[nodiscard]] GraphicsPipeline* BuiltPipeline(GraphicsPipeline* pipeline) const noexcept;
 
-    /// Whether the current draw may be skipped while its pipeline is being built.
-    [[nodiscard]] bool CanSkipDraw() const noexcept;
+    /// Whether the current draw may be skipped while its pipeline's driver compile runs.
+    [[nodiscard]] bool CanSkipCompilingDraw(const GraphicsPipeline& pipeline) const noexcept;
 
     /// Builds the pipeline of graphics_key, which is not in graphics_cache. Returns false when it
     /// was left translating on a worker thread (the draw is skipped), true when graphics_cache
@@ -309,6 +309,13 @@ private:
     Common::ThreadWorker serialization_thread;
 
     mutable DrawSkip last_skip{};
+    /// Draws met while their pipeline compiled: skipped, or waited for (and why), since the last
+    /// report.
+    mutable u64 compiling_skipped{};
+    mutable u64 compiling_waited_storage{};
+    mutable u64 compiling_waited_fullscreen{};
+    mutable u64 compiling_waited_targets{};
+    mutable std::chrono::steady_clock::time_point compiling_reported{};
     /// Why the null pipelines in graphics_cache failed (GPU thread only).
     std::unordered_map<GraphicsPipelineCacheKey, DrawSkip> failure_reasons;
     DynamicFeatures dynamic_features;

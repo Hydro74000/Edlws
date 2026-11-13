@@ -427,11 +427,15 @@ bool IsAsyncTranslationAllowed() {
 }
 
 // EDEN_NX2_ASYNC_TRANSLATION_WAIT_MS=<milliseconds>: how long the GPU thread waits for a
-// pipeline it just queued before skipping the draw. Default 3; 0 never waits.
+// pipeline it just queued before skipping the draw; 0 never waits. By default it waits until the
+// translation is done (a few milliseconds, the driver compile is not part of it): skipping is
+// decided once the pipeline's shader infos tell what the draw writes.
 std::chrono::microseconds GetTranslationWaitBudget() {
-    constexpr double DefaultMilliseconds = 3.0;
     const char* const value = std::getenv("EDEN_NX2_ASYNC_TRANSLATION_WAIT_MS");
-    const double milliseconds = value != nullptr ? std::strtod(value, nullptr) : DefaultMilliseconds;
+    if (value == nullptr) {
+        return std::chrono::microseconds::max();
+    }
+    const double milliseconds = std::strtod(value, nullptr);
     if (!(milliseconds > 0.0)) {
         return std::chrono::microseconds{0};
     }
@@ -521,10 +525,17 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
     LOG_INFO(Render_Vulkan, "Pipeline compiles run on {} worker threads",
              device.HasBrokenParallelShaderCompiling() ? 1 : GetTotalPipelineWorkers());
     if (use_async_translation) {
-        LOG_INFO(Render_Vulkan,
-                 "Native graphics pipelines are translated on {} worker threads, wait budget "
-                 "{:.1f} ms",
-                 num_translation_threads, translation_wait_budget.count() / 1000.0);
+        if (translation_wait_budget == std::chrono::microseconds::max()) {
+            LOG_INFO(Render_Vulkan,
+                     "Native graphics pipelines are translated on {} worker threads, the draw "
+                     "waiting for its translation",
+                     num_translation_threads);
+        } else {
+            LOG_INFO(Render_Vulkan,
+                     "Native graphics pipelines are translated on {} worker threads, wait budget "
+                     "{:.1f} ms",
+                     num_translation_threads, translation_wait_budget.count() / 1000.0);
+        }
     }
     LOG_INFO(Render_Vulkan, "Graphics pipelines {} the shaders of earlier pipelines that fit them",
              use_shader_reuse ? "reuse" : "do not reuse (EDEN_NX2_SHADER_REUSE=0)");
@@ -1292,28 +1303,56 @@ GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) const
     if (!use_asynchronous_shaders) {
         return pipeline;
     }
-    if (CanSkipDraw()) {
+    const bool skip = CanSkipCompilingDraw(*pipeline);
+    const auto now = std::chrono::steady_clock::now();
+    if (now - compiling_reported >= std::chrono::seconds{10}) {
+        if (compiling_skipped + compiling_waited_storage + compiling_waited_fullscreen +
+                compiling_waited_targets !=
+            0) {
+            LOG_INFO(Render_Vulkan,
+                     "Asynchronous shaders: {} draws skipped while their pipeline compiled, {} "
+                     "waited for it (storage writes or transform feedback), {} waited (full-screen "
+                     "passes), {} waited (targets not drawn regularly)",
+                     compiling_skipped, compiling_waited_storage, compiling_waited_fullscreen,
+                     compiling_waited_targets);
+        }
+        compiling_skipped = compiling_waited_storage = compiling_waited_fullscreen =
+            compiling_waited_targets = 0;
+        compiling_reported = now;
+    }
+    if (skip) {
+        ++compiling_skipped;
         last_skip = DrawSkip::Compiling;
         return nullptr;
     }
     return pipeline;
 }
 
-bool PipelineCache::CanSkipDraw() const noexcept {
-    // If something is using depth, we can assume that games are not rendering anything which
-    // will be used one time.
-    if (maxwell3d->regs.zeta_enable) {
-        return true;
+// Skipping a draw while its pipeline compiles leaves a hole until a later draw redraws the same
+// thing. That happens by itself when the draw's render targets are drawn again regularly (every
+// frame, or every few frames for rotating targets): a later frame's draw, once the pipeline is
+// ready, fills them again. A target drawn once and kept (a
+// texture rendered at load, a cached shadow map, an image a menu draws once) would keep the hole,
+// and the writes of a draw to storage buffers, storage images or transform feedback buffers are
+// not redone by anything: those draws wait for their pipeline, as without asynchronous shaders.
+bool PipelineCache::CanSkipCompilingDraw(const GraphicsPipeline& pipeline) const noexcept {
+    if (pipeline.WritesStorage() || maxwell3d->regs.transform_feedback_enabled != 0) {
+        ++compiling_waited_storage;
+        return false;
     }
-    // If games are using a small index count, we can assume these are full screen quads.
-    // Usually these shaders are only used once for building textures so we can assume they
-    // can't be built async
-    const auto& draw_state = maxwell3d->draw_manager.draw_state;
-    if (draw_state.draw_element_count <= 6) {
+    // A full-screen pass (a quad or a triangle: tone mapping, a blur, the final composite) left
+    // out shows as a whole wrong frame, and there are few of these pipelines.
+    if (maxwell3d->draw_manager.draw_state.draw_element_count <= 6) {
+        ++compiling_waited_fullscreen;
+        return false;
+    }
+    if (!texture_cache.RenderTargetsDrawnRegularly()) {
+        ++compiling_waited_targets;
         return false;
     }
     return true;
 }
+
 
 bool PipelineCache::BuildNewGraphicsPipeline() {
     if (CanTranslateAsynchronously()) {
@@ -1763,7 +1802,7 @@ void PipelineCache::SerializeGraphicsPipeline(const GraphicsPipelineCacheKey& ke
 // met them, so translation never reads guest memory for instructions. Compute pipelines stay
 // synchronous: a skipped dispatch would lose its outputs.
 bool PipelineCache::CanTranslateAsynchronously() const {
-    if (!use_async_translation || !CanSkipDraw()) {
+    if (!use_async_translation) {
         return false;
     }
     if (!maxwell3d->GetNativeMacroEngine().native_turing) {
@@ -1837,14 +1876,20 @@ std::optional<std::future<void>> PipelineCache::QueueGraphicsTranslation() {
 }
 
 bool PipelineCache::WaitForGraphicsTranslation(std::future<void>& done) {
-    // Waiting only helps when the job starts right away: behind a backlog it would spend the
+    const bool until_done = translation_wait_budget == std::chrono::microseconds::max();
+    // A budget only helps when the job starts right away: behind a backlog it would spend the
     // whole budget without getting the pipeline.
     if (translation_wait_budget.count() == 0 ||
-        translating_graphics.size() > num_translation_threads) {
+        (!until_done && translating_graphics.size() > num_translation_threads)) {
         return false;
     }
     const auto begin = std::chrono::steady_clock::now();
-    const bool in_time = done.wait_for(translation_wait_budget) == std::future_status::ready;
+    bool in_time = true;
+    if (until_done) {
+        done.wait();
+    } else {
+        in_time = done.wait_for(translation_wait_budget) == std::future_status::ready;
+    }
     GetTranslationReport().Waited(std::chrono::steady_clock::now() - begin, in_time);
     if (!in_time) {
         return false;
@@ -1867,9 +1912,10 @@ void PipelineCache::TranslateGraphicsPipeline(const GraphicsPipelineCacheKey& ke
     }
     std::unique_ptr<GraphicsPipeline> pipeline;
     try {
-        // Not built in parallel: the driver compile runs here too, so the pipeline can be drawn
-        // with as soon as the GPU thread adopts it.
-        pipeline = CreateGraphicsPipeline(pools, key, MakeSpan(env_ptrs), nullptr, false);
+        // The driver compile goes to the pipeline workers: the GPU thread adopts the pipeline as
+        // soon as it is translated, and its draws then skip it or wait for it by what they draw
+        // (CanSkipCompilingDraw), which needs the translation's shader infos.
+        pipeline = CreateGraphicsPipeline(pools, key, MakeSpan(env_ptrs), nullptr, true);
     } catch (const std::exception& exception) {
         // Shader errors are handled inside; nothing else may end the worker thread.
         LOG_ERROR(Render_Vulkan, "Graphics pipeline translation failed: {}", exception.what());
