@@ -7,6 +7,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <functional>
 #include <condition_variable>
 #include <mutex>
@@ -57,6 +58,13 @@ public:
         return static_cast<bool>(pipeline);
     }
 
+    /// When the dispatch that first needed this pipeline reached the pipeline cache.
+    void SetDiscovered(std::chrono::steady_clock::time_point discovered_,
+                       std::chrono::steady_clock::duration since_previous_) {
+        discovered = discovered_;
+        since_previous = since_previous_;
+    }
+
 private:
     const Device& device;
     vk::PipelineCache& pipeline_cache;
@@ -81,8 +89,15 @@ private:
     std::condition_variable build_condvar;
     std::mutex build_mutex;
     std::atomic_bool is_built{false};
-    /// Builds the pipeline once, on whichever thread gets here first.
-    void RunBuild();
+    /// Builds the pipeline once, on whichever thread gets here first. True when this call built it.
+    bool RunBuild();
+
+    // Timeline of a build the dispatch had to wait for, logged by the waiting thread.
+    std::chrono::steady_clock::time_point discovered{};
+    std::chrono::steady_clock::duration since_previous{};
+    std::chrono::steady_clock::time_point queued_at{};
+    std::chrono::steady_clock::time_point compile_begin{};
+    std::chrono::steady_clock::time_point compile_end{};
 
     std::function<void()> build_task;
     std::atomic_bool build_claimed{false};

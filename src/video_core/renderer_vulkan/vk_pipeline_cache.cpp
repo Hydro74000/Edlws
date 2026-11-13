@@ -1973,6 +1973,12 @@ std::unique_ptr<ComputePipeline> PipelineCache::CreateComputePipeline(
 
     main_pools.ReleaseContents();
     auto pipeline{CreateComputePipeline(main_pools, key, env, nullptr, true)};
+    if (pipeline) {
+        pipeline->SetDiscovered(begin, last_new_compute == std::chrono::steady_clock::time_point{}
+                                           ? std::chrono::steady_clock::duration{}
+                                           : begin - last_new_compute);
+        last_new_compute = begin;
+    }
     if (!pipeline || pipeline_cache_filename.empty()) {
         return pipeline;
     }
