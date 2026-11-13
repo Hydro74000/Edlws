@@ -420,6 +420,8 @@ struct System::Impl {
         auto process = Service::AM::CreateApplicationProcess(control, app_loader, load_result, system, file, params.program_id, params.program_index);
         if (load_result != Loader::ResultStatus::Success) {
             LOG_CRITICAL(Core, "Failed to load ROM (Error {})!", load_result);
+            // Its destructor finalizes the process through the kernel: before the kernel goes.
+            process.reset();
             ShutdownMainProcess();
             return SystemResultStatus(u32(SystemResultStatus::ErrorLoader) + u32(load_result));
         }
@@ -428,6 +430,7 @@ struct System::Impl {
             LOG_CRITICAL(Core, "Failed to obtain loader for {}!", filepath);
             // The kernel is already initialized. Left running, it is destroyed with the global
             // System after main() returns, when device memory is already gone, and exit crashes.
+            process.reset();
             ShutdownMainProcess();
             return SystemResultStatus::ErrorGetLoader;
         }
@@ -456,6 +459,7 @@ struct System::Impl {
         SystemResultStatus init_result{SetupForApplicationProcess(system, emu_window)};
         if (init_result != SystemResultStatus::Success) {
             LOG_CRITICAL(Core, "Failed to initialize system (Error {})!", int(init_result));
+            process.reset();
             ShutdownMainProcess();
             return init_result;
         }
