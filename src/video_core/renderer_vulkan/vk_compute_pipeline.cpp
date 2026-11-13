@@ -89,6 +89,7 @@ ComputePipeline::ComputePipeline(const Device& device_, Scheduler& scheduler, vk
         if (on_parallel_worker) {
             stats_role.emplace(PipelineStats::Role::Par);
         }
+        compile_begin = std::chrono::steady_clock::now();
         const VkPipelineShaderStageRequiredSubgroupSizeCreateInfoEXT subgroup_size_ci{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO_EXT,
             .pNext = nullptr,
@@ -133,6 +134,7 @@ ComputePipeline::ComputePipeline(const Device& device_, Scheduler& scheduler, vk
         } catch (const vk::Exception& exception) {
             LOG_CRITICAL(Render_Vulkan, "Adreno rejected compute shader {:016X}: {}", shader_hash,
                          exception.what());
+            compile_end = std::chrono::steady_clock::now();
             std::scoped_lock lock{build_mutex};
             is_built = true;
             build_condvar.notify_one();
@@ -155,6 +157,7 @@ ComputePipeline::ComputePipeline(const Device& device_, Scheduler& scheduler, vk
         // Nothing reads the module once the pipeline exists; the driver keeps its SPIR-V while it
         // lives.
         spv_module.reset();
+        compile_end = std::chrono::steady_clock::now();
         std::scoped_lock lock{build_mutex};
         is_built = true;
         build_condvar.notify_one();
@@ -163,6 +166,7 @@ ComputePipeline::ComputePipeline(const Device& device_, Scheduler& scheduler, vk
         }
     }};
     build_task = std::move(func);
+    queued_at = std::chrono::steady_clock::now();
     if (thread_worker) {
         thread_worker->QueueWork([this] { RunBuild(); });
     } else {
@@ -170,14 +174,15 @@ ComputePipeline::ComputePipeline(const Device& device_, Scheduler& scheduler, vk
     }
 }
 
-void ComputePipeline::RunBuild() {
+bool ComputePipeline::RunBuild() {
     // A draw or dispatch that needs the pipeline builds it on the scheduler thread instead of
     // waiting for the worker queue, which can hold hundreds of builds, to reach it.
     if (build_claimed.exchange(true)) {
-        return;
+        return false;
     }
     build_task();
     build_task = nullptr;
+    return true;
 }
 
 bool ComputePipeline::Configure(Tegra::Engines::KeplerCompute& kepler_compute,
@@ -308,9 +313,30 @@ bool ComputePipeline::Configure(Tegra::Engines::KeplerCompute& kepler_compute,
         scheduler.Record([this, where = std::source_location::current()](vk::CommandBuffer) {
             const VideoCommon::LongWait long_wait{
                 "Vulkan worker waiting for a compute pipeline build", where};
-            RunBuild();
-            std::unique_lock lock{build_mutex};
-            build_condvar.wait(lock, [this] { return is_built.load(std::memory_order::relaxed); });
+            const bool was_built{is_built.load(std::memory_order::acquire)};
+            const auto need{std::chrono::steady_clock::now()};
+            const bool built_here{RunBuild()};
+            {
+                std::unique_lock lock{build_mutex};
+                build_condvar.wait(lock,
+                                   [this] { return is_built.load(std::memory_order::relaxed); });
+            }
+            if (was_built || !PipelineStats::Enabled()) {
+                return;
+            }
+            const auto ms = [](std::chrono::steady_clock::duration duration) {
+                return std::chrono::duration<double, std::milli>(duration).count();
+            };
+            const auto done{std::chrono::steady_clock::now()};
+            LOG_INFO(Render_Vulkan,
+                     "Compute pipeline {:016x} waited for: new {:.1f} ms after the previous new "
+                     "compute pipeline, found {:.1f} ms before the dispatch needed it, "
+                     "translated in {:.1f} ms, queued {:.1f} ms, compiled in {:.1f} ms by {}, "
+                     "dispatch waited {:.1f} ms",
+                     shader_hash, ms(since_previous), ms(need - discovered),
+                     ms(queued_at - discovered), ms(compile_begin - queued_at),
+                     ms(compile_end - compile_begin), built_here ? "the scheduler" : "a worker",
+                     ms(done - need));
         });
     }
 
