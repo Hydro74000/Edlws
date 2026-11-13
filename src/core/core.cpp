@@ -220,6 +220,7 @@ struct System::Impl {
         }
         // The guest RAM is sized for the memory layout of the program to load: telling 4 GiB from
         // extended is not enough (a Switch 2 game takes 12 GiB whatever the setting).
+        // ShutdownMainProcess releases it.
         if (!device_memory.has_value() ||
             device_memory->buffer.BackingSize() !=
                 Kernel::Board::Nintendo::Nx::KSystemControl::Init::GetIntendedMemorySize()) {
@@ -232,14 +233,22 @@ struct System::Impl {
             return;
         }
 
+        // The settings and time services start on the emulated cores, which only run once the
+        // game has finished loading (shaders included). Waiting for them here froze the UI
+        // thread for the whole loading screen when settings were applied during it. If they
+        // are not up yet there is nothing to refresh: they read the current settings when
+        // they start.
+        auto& services_by_name = system.ServiceManager();
         auto settings_service =
-            system.ServiceManager().GetService<Service::Set::ISystemSettingsServer>("set:sys",
-                                                                                    true);
+            services_by_name.GetService<Service::Set::ISystemSettingsServer>("set:sys");
         auto static_service_a =
-            system.ServiceManager().GetService<Service::Glue::Time::StaticService>("time:a", true);
-
+            services_by_name.GetService<Service::Glue::Time::StaticService>("time:a");
         auto static_service_s =
-            system.ServiceManager().GetService<Service::PSC::Time::StaticService>("time:s", true);
+            services_by_name.GetService<Service::PSC::Time::StaticService>("time:s");
+        if (!settings_service || !static_service_a || !static_service_s) {
+            LOG_INFO(Core, "Time services not started yet, they will use the current settings");
+            return;
+        }
 
         std::shared_ptr<Service::PSC::Time::SystemClock> user_clock;
         static_service_a->GetStandardUserSystemClock(&user_clock);
@@ -359,6 +368,10 @@ struct System::Impl {
     }
 
     SystemResultStatus Load(System& system, Frontend::EmuWindow& emu_window, const std::string& filepath, Service::AM::FrontendAppletParameters& params) {
+        // ShutdownMainProcess of the previous game left this set, and only the Android frontend
+        // cleared it: the audio renderer and sinks of a game started after a stop saw a shutdown
+        // and stayed silent.
+        SetShuttingDown(false);
         if (params.launch_type == Service::AM::LaunchType::FrontendInitiated) {
             fs_controller.InitTempStorage();
         }
@@ -407,12 +420,18 @@ struct System::Impl {
         auto process = Service::AM::CreateApplicationProcess(control, app_loader, load_result, system, file, params.program_id, params.program_index);
         if (load_result != Loader::ResultStatus::Success) {
             LOG_CRITICAL(Core, "Failed to load ROM (Error {})!", load_result);
+            // Its destructor finalizes the process through the kernel: before the kernel goes.
+            process.reset();
             ShutdownMainProcess();
             return SystemResultStatus(u32(SystemResultStatus::ErrorLoader) + u32(load_result));
         }
 
         if (!app_loader) {
             LOG_CRITICAL(Core, "Failed to obtain loader for {}!", filepath);
+            // The kernel is already initialized. Left running, it is destroyed with the global
+            // System after main() returns, when device memory is already gone, and exit crashes.
+            process.reset();
+            ShutdownMainProcess();
             return SystemResultStatus::ErrorGetLoader;
         }
 
@@ -440,6 +459,7 @@ struct System::Impl {
         SystemResultStatus init_result{SetupForApplicationProcess(system, emu_window)};
         if (init_result != SystemResultStatus::Success) {
             LOG_CRITICAL(Core, "Failed to initialize system (Error {})!", int(init_result));
+            process.reset();
             ShutdownMainProcess();
             return init_result;
         }
@@ -499,6 +519,11 @@ struct System::Impl {
         // Reset per-game flags
         Settings::values.use_squashed_iterated_blend = false;
 
+        // Once powered off, services stop writing replies, so a guest thread whose IPC call
+        // completes would read its own request back and abort (2010-0212, a Userspace PANIC on
+        // every stop). Keep guest threads from running again first; the wait for running ones
+        // comes after the GPU has released any that it holds in host code.
+        kernel.RequestSuspendEmulation();
         is_powered_on = false;
         exit_locked = false;
         exit_requested = false;
@@ -511,6 +536,8 @@ struct System::Impl {
         kernel.SuspendEmulation(true);
         kernel.CloseServices();
         kernel.ShutdownCores();
+        // Stopped before the window system took it (during loading): it would outlive the kernel.
+        applet_manager.DropPendingProcess();
         services.reset();
         service_manager.reset();
         fs_controller.Reset();
@@ -537,6 +564,10 @@ struct System::Impl {
 
         // Reset all glue registrations
         arp_manager.ResetAll();
+
+        // The guest RAM keeps every page the game touched until it is destroyed (up to 12 GiB),
+        // and nothing uses it until the next game: InitializeKernel creates it again.
+        device_memory.reset();
 
         LOG_DEBUG(Core, "Shutdown OK");
     }
