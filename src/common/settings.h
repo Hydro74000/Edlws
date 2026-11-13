@@ -618,13 +618,11 @@ struct Values {
     // Donkey Kong Bananza: lock its frame rate controller to 30 fps (loader/nso.cpp).
     SwitchableSetting<bool> dk_30fps{linkage, false, "dk_30fps", Category::RendererAdvanced};
 
-    SwitchableSetting<bool> use_reactive_flushing{linkage,
-#ifdef __ANDROID__
-                                                  false,
-#else
-                                                  true,
-#endif
-                                                  "use_reactive_flushing",
+    // Off everywhere: guest reads of GPU-written memory trap only on the pages the GPU wrote
+    // (read traps with fastmem; without fastmem every read of a cached page asks the caches). On,
+    // every cached page traps on read and waits for the host GPU (Ocarina of Time froze for
+    // hundreds of milliseconds at a time in the Qt app, whose fresh config had it on).
+    SwitchableSetting<bool> use_reactive_flushing{linkage, false, "use_reactive_flushing",
                                                   Category::RendererAdvanced};
 
     SwitchableSetting<bool> barrier_feedback_loops{linkage, true, "barrier_feedback_loops",
