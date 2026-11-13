@@ -20,6 +20,7 @@
 #include <bit>
 #include <numeric>
 #include "common/cityhash.h"
+#include "common/memory_detect.h"
 #include "common/scope_exit.h"
 #include "common/fs/fs.h"
 #include "common/fs/path_util.h"
@@ -1262,13 +1263,23 @@ void PipelineCache::EvictUnusedPipelines() {
     if (device.IsMoltenVK()) {
         return;
     }
-    // Each built pipeline holds ~0.45 MB of driver memory and none was ever destroyed, so it grew
-    // with every place a session went (title 1: 1,500 on its title screen alone). One unused for
-    // this long is destroyed; rebuilding it later requires a full GPU-thread shader translation
-    // (~8.5 ms each) plus a driver pipeline cache hit.
+    // A pipeline unused for this long can be destroyed; building it again later takes a driver
+    // pipeline cache hit, plus a shader translation unless earlier shaders can be reused. Each one
+    // was counted at ~0.45 MB of driver memory (title 1: 1,500 on its title screen alone), but
+    // destroying 2,009 of Ocarina's gave no measurable memory back on NVIDIA, while the ones built
+    // from the disk cache at boot and not used in their first 9000 frames went, then were built
+    // again in game when the player got to them. So they go only when the system runs short of
+    // memory; where its free memory isn't known, by age as before.
     constexpr u64 EvictAfterFrames = 9000;
     if (frame_count <= EvictAfterFrames) {
         return;
+    }
+    constexpr u64 EvictBelowFreePercent = 15;
+    if (const u64 available = Common::GetAvailablePhysicalMemory(); available != 0) {
+        const u64 total = Common::GetMemInfo().TotalPhysicalMemory;
+        if (available >= total / 100 * EvictBelowFreePercent) {
+            return;
+        }
     }
     const u64 cutoff = frame_count - EvictAfterFrames;
     const u64 tick = scheduler.CurrentTick();
