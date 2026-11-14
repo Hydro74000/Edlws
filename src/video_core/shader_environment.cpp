@@ -1132,6 +1132,20 @@ void SerializePipeline(std::span<const char> key, std::span<const GenericEnviron
     }
 }
 
+namespace {
+// A pipeline cache file that couldn't be read to its end: the records read so far of an older
+// version are written again under the current one, anything else is deleted.
+void DropUnreadablePipelines(const std::filesystem::path& filename, const CacheUpgrade* upgrade) {
+    if (upgrade != nullptr && upgrade->from_version != 0) {
+        return;
+    }
+    if (!Common::FS::RemoveFile(filename)) {
+        LOG_ERROR(Common_Filesystem, "Failed to delete pipeline cache file {}",
+                  Common::FS::PathToUTF8String(filename));
+    }
+}
+} // Anonymous namespace
+
 void LoadPipelines(
     std::stop_token stop_loading, const std::filesystem::path& filename, u32 expected_cache_version,
     Common::UniqueFunction<void, std::ifstream&, FileEnvironment> load_compute,
@@ -1200,14 +1214,13 @@ void LoadPipelines(
 
 } catch (const std::ios_base::failure& e) {
     LOG_ERROR(Common_Filesystem, "{}", e.what());
-    if (upgrade != nullptr && upgrade->from_version != 0) {
-        // The records read so far are written again under the current version.
-        return;
-    }
-    if (!Common::FS::RemoveFile(filename)) {
-        LOG_ERROR(Common_Filesystem, "Failed to delete pipeline cache file {}",
-                  Common::FS::PathToUTF8String(filename));
-    }
+    DropUnreadablePipelines(filename, upgrade);
+} catch (...) {
+    // macOS's libc++ throws an ios_base::failure the handler above doesn't match in this
+    // -fno-rtti build (a cut-short file reached the caller).
+    LOG_ERROR(Common_Filesystem, "Unreadable pipeline cache file {}",
+              Common::FS::PathToUTF8String(filename));
+    DropUnreadablePipelines(filename, upgrade);
 }
 
 void RewritePipelines(const std::filesystem::path& filename, u32 cache_version, u32 old_version,

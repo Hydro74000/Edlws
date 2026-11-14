@@ -696,7 +696,6 @@ bool DmaPusher::ReadGpuWrittenCommands(GPUVAddr address, u32 count) {
         split.WaitForWriters();
     }
     bool past_sync = !split.Active();
-    using GpuWrittenList = VideoCore::RasterizerInterface::GpuWrittenList;
     command_headers.resize_destructive(count);
     u8* const out = reinterpret_cast<u8*>(command_headers.data());
     for (GPUVAddr chunk = address; chunk < end;) {
