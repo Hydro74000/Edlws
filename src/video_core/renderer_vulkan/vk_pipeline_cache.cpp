@@ -78,7 +78,7 @@ using VideoCommon::GraphicsEnvironment;
 // kept. Bump MIN_COMPATIBLE_CACHE_VERSION too only when the record layout (environment or key
 // serialization) changes, which deletes older caches. 20 changed the environment layout; the keys
 // last changed before it.
-constexpr u32 CACHE_VERSION = 24;
+constexpr u32 CACHE_VERSION = 25;
 constexpr u32 MIN_COMPATIBLE_CACHE_VERSION = 20;
 constexpr size_t VULKAN_CACHE_FLUSH_PIPELINES = 128;
 constexpr size_t VULKAN_CACHE_FLUSH_MIN_SECONDS = 30;
@@ -1601,7 +1601,13 @@ std::shared_ptr<ReusableShaders> PipelineCache::BuildGraphicsShaders(
 
         const auto runtime_info{MakeRuntimeInfo(programs, key, program, previous_stage)};
         ConvertLegacyToGeneric(program, runtime_info);
-        binding.descriptor_set = GraphicsDescriptorSet(stage_index);
+        if (const u32 set{GraphicsDescriptorSet(stage_index)}; set != binding.descriptor_set) {
+            binding = Shader::Backend::Bindings{
+                .descriptor_set = set,
+                .texture_scaling_index = GraphicsTextureScalingBase(set),
+                .image_scaling_index = GraphicsImageScalingBase(set),
+            };
+        }
         std::vector<u32> code;
         {
             const PipelineStats::ScopedTimer emit_timer{PipelineStats::Kind::Graphics,

@@ -144,13 +144,24 @@ inline void WriteDescriptorBuffer(const Device& device, const DescriptorBufferLa
            Shader::NumDescriptors(info.image_descriptors);
 }
 
-/// Descriptor sets a graphics pipeline binds.
-inline constexpr size_t NUM_GRAPHICS_DESCRIPTOR_SETS = 1;
+/// Descriptor sets a graphics pipeline binds: the pre-rasterization stages, then the fragment stage.
+inline constexpr size_t NUM_GRAPHICS_DESCRIPTOR_SETS = 2;
 
-/// The descriptor set of a graphics stage's resources. Stages of one set are consecutive, so each
-/// set's descriptors are one range of the draw's descriptor payload.
-[[nodiscard]] constexpr u32 GraphicsDescriptorSet([[maybe_unused]] size_t stage_index) noexcept {
-    return 0;
+/// The descriptor set of a graphics stage's resources, numbered from binding 0 in each set, so a
+/// stage's descriptors don't depend on the other set's stages. Stages of one set are consecutive,
+/// so each set's descriptors are one range of the draw's descriptor payload.
+[[nodiscard]] constexpr u32 GraphicsDescriptorSet(size_t stage_index) noexcept {
+    return stage_index == 4 ? 1 : 0;
+}
+
+/// First rescaling bit of a set's textures and images: each set has its own share of the words.
+[[nodiscard]] constexpr u32 GraphicsTextureScalingBase(u32 set) noexcept {
+    return set * Shader::Backend::SPIRV::NUM_TEXTURE_SCALING_WORDS * 32 /
+           NUM_GRAPHICS_DESCRIPTOR_SETS;
+}
+[[nodiscard]] constexpr u32 GraphicsImageScalingBase(u32 set) noexcept {
+    return set * Shader::Backend::SPIRV::NUM_IMAGE_SCALING_WORDS * 32 /
+           NUM_GRAPHICS_DESCRIPTOR_SETS;
 }
 
 class DescriptorLayoutBuilder {
@@ -198,9 +209,12 @@ public:
         return result;
     }
 
+    /// An empty builder makes no layout, unless allow_empty: a set below a set with resources
+    /// needs one in the pipeline layout.
     vk::DescriptorSetLayout CreateDescriptorSetLayout(bool use_push_descriptor,
-                                                      bool use_descriptor_buffer = false) const {
-        if (bindings.empty()) {
+                                                      bool use_descriptor_buffer = false,
+                                                      bool allow_empty = false) const {
+        if (bindings.empty() && !allow_empty) {
             return nullptr;
         }
         VkDescriptorSetLayoutCreateFlags flags = 0;
@@ -352,6 +366,20 @@ public:
         }
     }
 
+    /// Moves to the words of a graphics descriptor set's stages.
+    void SeekSet(u32 set) noexcept {
+        if (set == current_set) {
+            return;
+        }
+        current_set = set;
+        const u32 texture_base{GraphicsTextureScalingBase(set)};
+        texture_ptr = words.data() + texture_base / 32;
+        texture_bit = 1u << (texture_base % 32);
+        const u32 image_base{GraphicsImageScalingBase(set)};
+        image_ptr = words.data() + Shader::Backend::SPIRV::NUM_TEXTURE_SCALING_WORDS + image_base / 32;
+        image_bit = 1u << (image_base % 32);
+    }
+
     const std::array<u32, NUM_TEXTURE_AND_IMAGE_SCALING_WORDS>& Data() const noexcept {
         return words;
     }
@@ -362,6 +390,7 @@ private:
     u32* image_ptr{words.data() + Shader::Backend::SPIRV::NUM_TEXTURE_SCALING_WORDS};
     u32 texture_bit{1u};
     u32 image_bit{1u};
+    u32 current_set{};
 };
 
 class RenderAreaPushConstant {

@@ -383,8 +383,8 @@ GraphicsPipeline::GraphicsPipeline(
     uses_descriptor_buffer =
         single_set && builders[0].CanUseDescriptorBuffer() && descriptor_buffer_ring.IsValid();
     for (u32 set = 0; set < num_descriptor_sets; ++set) {
-        descriptor_sets[set].layout =
-            builders[set].CreateDescriptorSetLayout(uses_push_descriptor, uses_descriptor_buffer);
+        descriptor_sets[set].layout = builders[set].CreateDescriptorSetLayout(
+            uses_push_descriptor, uses_descriptor_buffer, true);
     }
     if (uses_descriptor_buffer) {
         descriptor_buffer_layout = builders[0].MakeDescriptorBufferLayout(*descriptor_sets[0].layout);
@@ -426,7 +426,7 @@ GraphicsPipeline::GraphicsPipeline(
             DescriptorSetState& state{descriptor_sets[set]};
             state.update_template = builders[set].CreateTemplate(
                 *state.layout, *pipeline_layout, uses_push_descriptor, set);
-            if (!uses_push_descriptor) {
+            if (!uses_push_descriptor && !builders[set].Empty()) {
                 state.allocator = descriptor_pool.Allocator(
                     device, scheduler, *state.layout,
                     std::span<const Shader::Info>(stage_infos).subspan(first_stage[set],
@@ -820,6 +820,7 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
         }
         {
             Profile::Scope scope{Profile::Zone::PushDescriptors};
+            rescaling.SeekSet(GraphicsDescriptorSet(stage));
             PushImageDescriptors(texture_cache, guest_descriptor_queue, stage_infos[stage],
                                  rescaling, samplers_it, views_it);
         }
@@ -988,16 +989,34 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
         } else if (update_descriptors) {
             const auto* const entries = static_cast<const DescriptorUpdateEntry*>(descriptor_data);
             const vk::Device& dev{device.GetLogical()};
+            // A set without resources (below the fragment's) is left unbound: nothing reads it.
             std::array<VkDescriptorSet, NUM_GRAPHICS_DESCRIPTOR_SETS> sets;
+            u32 first{};
+            u32 count{};
             for (u32 set = 0; set < num_descriptor_sets; ++set) {
                 DescriptorSetState& state{descriptor_sets[set]};
-                sets[set] = state.allocator.Commit();
-                dev.UpdateDescriptorSet(sets[set], *state.update_template,
+                if (!state.update_template) {
+                    if (count != 0) {
+                        cmdbuf.BindDescriptorSets(VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                                  *pipeline_layout, first,
+                                                  vk::Span<VkDescriptorSet>(sets.data(), count),
+                                                  nullptr);
+                    }
+                    count = 0;
+                    continue;
+                }
+                if (count == 0) {
+                    first = set;
+                }
+                sets[count] = state.allocator.Commit();
+                dev.UpdateDescriptorSet(sets[count], *state.update_template,
                                         entries + state.first_entry);
+                ++count;
             }
-            cmdbuf.BindDescriptorSets(VK_PIPELINE_BIND_POINT_GRAPHICS, *pipeline_layout, 0,
-                                      vk::Span<VkDescriptorSet>(sets.data(), num_descriptor_sets),
-                                      nullptr);
+            if (count != 0) {
+                cmdbuf.BindDescriptorSets(VK_PIPELINE_BIND_POINT_GRAPHICS, *pipeline_layout, first,
+                                          vk::Span<VkDescriptorSet>(sets.data(), count), nullptr);
+            }
         }
     });
     return true;

@@ -1218,7 +1218,7 @@ void EmitContext::DefineRescalingInputPushConstant() {
     boost::container::static_vector<Id, 3> members{};
     u32 member_index{0};
 
-    rescaling_textures_type = TypeArray(U32[1], Const(4u));
+    rescaling_textures_type = TypeArray(U32[1], Const(NUM_TEXTURE_SCALING_WORDS));
     Decorate(rescaling_textures_type, spv::Decoration::ArrayStride, 4u);
     members.push_back(rescaling_textures_type);
     rescaling_textures_member_index = member_index++;
