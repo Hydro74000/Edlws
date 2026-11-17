@@ -530,6 +530,14 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
                           Common::ThreadPlacement::Background) {
     LOG_INFO(Render_Vulkan, "Pipeline compiles run on {} worker threads",
              device.HasBrokenParallelShaderCompiling() ? 1 : GetTotalPipelineWorkers());
+    if (device.IsExtGraphicsPipelineLibraryEnabled()) {
+        LOG_INFO(Render_Vulkan,
+                 "Vertex and fragment pipelines are built from fast-linked libraries{}",
+                 device.HasBrokenParallelShaderCompiling()
+                     ? ""
+                     : fmt::format(", fragment libraries on {} more threads",
+                                   GetTotalPipelineWorkers() + 1));
+    }
     if (use_async_translation) {
         if (translation_wait_budget == std::chrono::microseconds::max()) {
             LOG_INFO(Render_Vulkan,
