@@ -402,7 +402,7 @@ GraphicsPipeline::GraphicsPipeline(
         try {
             const PipelineStats::ScopedTimer stats_timer{PipelineStats::Kind::Graphics,
                                                          PipelineStats::Stage::Driver};
-            MakePipeline(render_pass);
+            pipeline = UsesLibraries() ? MakeFromLibraries(render_pass) : MakePipeline(render_pass);
         } catch (const vk::Exception& exception) {
             LOG_CRITICAL(Render_Vulkan, "Graphics pipeline build failed: {}", exception.what());
             std::scoped_lock lock{build_mutex};
@@ -952,9 +952,10 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
     return true;
 }
 
-void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
+vk::Pipeline GraphicsPipeline::MakePipeline(VkRenderPass render_pass,
+                                            VkGraphicsPipelineLibraryFlagsEXT library) {
     if (IsMeshPipeline() && !device.IsExtMeshShaderSupported()) {
-        return;
+        return {};
     }
     FixedPipelineState::DynamicState dynamic{};
     if (!key.state.extended_dynamic_state) {
@@ -1371,23 +1372,48 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
     if (uses_descriptor_buffer) {
         flags |= VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
     }
-
-    pipeline = device.GetLogical().CreateGraphicsPipeline({
-        .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+    // A library holds only its subset's shaders and state (all of them without a subset).
+    const bool is_library{library != 0};
+    const auto has_subset = [&](VkGraphicsPipelineLibraryFlagsEXT subset) {
+        return !is_library || (library & subset) != 0;
+    };
+    const bool has_vertex_input{
+        has_subset(VK_GRAPHICS_PIPELINE_LIBRARY_VERTEX_INPUT_INTERFACE_BIT_EXT)};
+    const bool has_pre_rasterization{
+        has_subset(VK_GRAPHICS_PIPELINE_LIBRARY_PRE_RASTERIZATION_SHADERS_BIT_EXT)};
+    const bool has_fragment{has_subset(VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT)};
+    const bool has_output{has_subset(VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_OUTPUT_INTERFACE_BIT_EXT)};
+    static_vector<VkPipelineShaderStageCreateInfo, 5> subset_stages;
+    for (const VkPipelineShaderStageCreateInfo& stage_ci : shader_stages) {
+        if (stage_ci.stage == VK_SHADER_STAGE_FRAGMENT_BIT ? has_fragment : has_pre_rasterization) {
+            subset_stages.push_back(stage_ci);
+        }
+    }
+    const VkGraphicsPipelineLibraryCreateInfoEXT library_ci{
+        .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_LIBRARY_CREATE_INFO_EXT,
         .pNext = nullptr,
+        .flags = library,
+    };
+    if (is_library) {
+        flags |= VK_PIPELINE_CREATE_LIBRARY_BIT_KHR;
+    }
+
+    vk::Pipeline result = device.GetLogical().CreateGraphicsPipeline({
+        .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+        .pNext = is_library ? &library_ci : nullptr,
         .flags = flags,
-        .stageCount = static_cast<u32>(shader_stages.size()),
-        .pStages = shader_stages.data(),
-        .pVertexInputState = is_mesh ? nullptr : &vertex_input_ci,
-        .pInputAssemblyState = is_mesh ? nullptr : &input_assembly_ci,
-        .pTessellationState = is_mesh ? nullptr : &tessellation_ci,
-        .pViewportState = &viewport_ci,
-        .pRasterizationState = &rasterization_ci,
-        .pMultisampleState = &multisample_ci,
-        .pDepthStencilState = &depth_stencil_ci,
-        .pColorBlendState = &color_blend_ci,
+        .stageCount = static_cast<u32>(subset_stages.size()),
+        .pStages = subset_stages.data(),
+        .pVertexInputState = is_mesh || !has_vertex_input ? nullptr : &vertex_input_ci,
+        .pInputAssemblyState = is_mesh || !has_vertex_input ? nullptr : &input_assembly_ci,
+        .pTessellationState = is_mesh || !has_pre_rasterization ? nullptr : &tessellation_ci,
+        .pViewportState = has_pre_rasterization ? &viewport_ci : nullptr,
+        .pRasterizationState = has_pre_rasterization ? &rasterization_ci : nullptr,
+        .pMultisampleState = has_fragment || has_output ? &multisample_ci : nullptr,
+        .pDepthStencilState = has_fragment ? &depth_stencil_ci : nullptr,
+        .pColorBlendState = has_output ? &color_blend_ci : nullptr,
         .pDynamicState = &dynamic_state_ci,
-        .layout = *pipeline_layout,
+        .layout = has_pre_rasterization || has_fragment ? *pipeline_layout : VkPipelineLayout{},
         .renderPass = render_pass,
         .subpass = 0,
         .basePipelineHandle = nullptr,
@@ -1402,6 +1428,72 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
             color_blend_ci.attachmentCount
         );
         GPU::Logging::GPULogger::GetInstance().LogPipelineStateChange(pipeline_info);
+    }
+    return result;
+}
+
+bool GraphicsPipeline::UsesLibraries() const {
+    // Vertex and fragment stages only; the statistics of shader feedback need whole pipelines.
+    if (!device.IsExtGraphicsPipelineLibraryEnabled() ||
+        device.IsKhrPipelineExecutablePropertiesEnabled()) {
+        return false;
+    }
+    const GraphicsShaderModules& modules{*spv_modules};
+    return modules[0] && modules[4] && !modules[1] && !modules[2] && !modules[3] &&
+           !IsMeshPipeline() && key.state.xfb_enabled == 0;
+}
+
+vk::Pipeline GraphicsPipeline::MakeFromLibraries(VkRenderPass render_pass) {
+    static constexpr std::array<VkGraphicsPipelineLibraryFlagsEXT, NUM_LIBRARIES> subsets{
+        VK_GRAPHICS_PIPELINE_LIBRARY_VERTEX_INPUT_INTERFACE_BIT_EXT,
+        VK_GRAPHICS_PIPELINE_LIBRARY_PRE_RASTERIZATION_SHADERS_BIT_EXT,
+        VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT,
+        VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_OUTPUT_INTERFACE_BIT_EXT,
+    };
+    try {
+        std::array<VkPipeline, NUM_LIBRARIES> handles{};
+        for (size_t index = 0; index < NUM_LIBRARIES; ++index) {
+            libraries[index] = MakePipeline(render_pass, subsets[index]);
+            handles[index] = *libraries[index];
+        }
+        const VkPipelineLibraryCreateInfoKHR library_info{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_LIBRARY_CREATE_INFO_KHR,
+            .pNext = nullptr,
+            .libraryCount = static_cast<u32>(handles.size()),
+            .pLibraries = handles.data(),
+        };
+        // Linked without link-time optimization: fast, and it keeps each library's compile.
+        return device.GetLogical().CreateGraphicsPipeline(
+            {
+                .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+                .pNext = &library_info,
+                .flags = uses_descriptor_buffer
+                             ? VkPipelineCreateFlags{VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT}
+                             : VkPipelineCreateFlags{},
+                .stageCount = 0,
+                .pStages = nullptr,
+                .pVertexInputState = nullptr,
+                .pInputAssemblyState = nullptr,
+                .pTessellationState = nullptr,
+                .pViewportState = nullptr,
+                .pRasterizationState = nullptr,
+                .pMultisampleState = nullptr,
+                .pDepthStencilState = nullptr,
+                .pColorBlendState = nullptr,
+                .pDynamicState = nullptr,
+                .layout = *pipeline_layout,
+                .renderPass = render_pass,
+                .subpass = 0,
+                .basePipelineHandle = nullptr,
+                .basePipelineIndex = 0,
+            },
+            *pipeline_cache);
+    } catch (const vk::Exception& exception) {
+        LOG_WARNING(Render_Vulkan,
+                    "Graphics pipeline {:016X} from libraries failed ({}), building it whole",
+                    key.Hash(), exception.what());
+        libraries = {};
+        return MakePipeline(render_pass);
     }
 }
 
