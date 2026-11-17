@@ -1601,6 +1601,7 @@ std::shared_ptr<ReusableShaders> PipelineCache::BuildGraphicsShaders(
 
         const auto runtime_info{MakeRuntimeInfo(programs, key, program, previous_stage)};
         ConvertLegacyToGeneric(program, runtime_info);
+        binding.descriptor_set = GraphicsDescriptorSet(stage_index);
         std::vector<u32> code;
         {
             const PipelineStats::ScopedTimer emit_timer{PipelineStats::Kind::Graphics,

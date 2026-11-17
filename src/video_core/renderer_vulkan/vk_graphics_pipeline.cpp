@@ -73,8 +73,14 @@ VkShaderStageFlagBits StageFlag(const Shader::Info& info, VkShaderStageFlagBits 
     return slot_stage;
 }
 
-DescriptorLayoutBuilder MakeBuilder(const Device& device, std::span<const Shader::Info> infos) {
-    DescriptorLayoutBuilder builder{device};
+using GraphicsLayoutBuilders =
+    static_vector<DescriptorLayoutBuilder, NUM_GRAPHICS_DESCRIPTOR_SETS>;
+
+GraphicsLayoutBuilders MakeBuilders(const Device& device, std::span<const Shader::Info> infos) {
+    GraphicsLayoutBuilders builders;
+    for (size_t set = 0; set < NUM_GRAPHICS_DESCRIPTOR_SETS; ++set) {
+        builders.emplace_back(device);
+    }
     for (size_t index = 0; index < infos.size(); ++index) {
         static constexpr std::array stages{
             VK_SHADER_STAGE_VERTEX_BIT,
@@ -83,9 +89,10 @@ DescriptorLayoutBuilder MakeBuilder(const Device& device, std::span<const Shader
             VK_SHADER_STAGE_GEOMETRY_BIT,
             VK_SHADER_STAGE_FRAGMENT_BIT,
         };
-        builder.Add(infos[index], StageFlag(infos[index], stages.at(index)));
+        builders[GraphicsDescriptorSet(index)].Add(infos[index],
+                                                   StageFlag(infos[index], stages.at(index)));
     }
-    return builder;
+    return builders;
 }
 
 template <class StencilFace>
@@ -364,13 +371,23 @@ GraphicsPipeline::GraphicsPipeline(
                });
     });
 
-    DescriptorLayoutBuilder builder{MakeBuilder(device, stage_infos)};
-    uses_push_descriptor = builder.CanUsePushDescriptor();
-    uses_descriptor_buffer = builder.CanUseDescriptorBuffer() && descriptor_buffer_ring.IsValid();
-    descriptor_set_layout =
-        builder.CreateDescriptorSetLayout(uses_push_descriptor, uses_descriptor_buffer);
+    GraphicsLayoutBuilders builders{MakeBuilders(device, stage_infos)};
+    for (size_t set = 0; set < builders.size(); ++set) {
+        if (!builders[set].Empty()) {
+            num_descriptor_sets = static_cast<u32>(set + 1);
+        }
+    }
+    // Push descriptors and descriptor buffers go through set 0 only.
+    const bool single_set{num_descriptor_sets <= 1};
+    uses_push_descriptor = single_set && builders[0].CanUsePushDescriptor();
+    uses_descriptor_buffer =
+        single_set && builders[0].CanUseDescriptorBuffer() && descriptor_buffer_ring.IsValid();
+    for (u32 set = 0; set < num_descriptor_sets; ++set) {
+        descriptor_sets[set].layout =
+            builders[set].CreateDescriptorSetLayout(uses_push_descriptor, uses_descriptor_buffer);
+    }
     if (uses_descriptor_buffer) {
-        descriptor_buffer_layout = builder.MakeDescriptorBufferLayout(*descriptor_set_layout);
+        descriptor_buffer_layout = builders[0].MakeDescriptorBufferLayout(*descriptor_sets[0].layout);
         if (!descriptor_buffer_ring.CanAllocate(descriptor_buffer_layout.size)) {
             LOG_WARNING(Render_Vulkan,
                         "Graphics pipeline {:016X} needs {} descriptor bytes per draw, falling back "
@@ -378,18 +395,43 @@ GraphicsPipeline::GraphicsPipeline(
                         key.Hash(), descriptor_buffer_layout.size);
             uses_descriptor_buffer = false;
             descriptor_buffer_layout = {};
-            descriptor_set_layout = builder.CreateDescriptorSetLayout(uses_push_descriptor);
+            descriptor_sets[0].layout = builders[0].CreateDescriptorSetLayout(uses_push_descriptor);
         }
     }
 
-    const VkDescriptorSetLayout set_layout{*descriptor_set_layout};
-    pipeline_layout = builder.CreatePipelineLayout(set_layout);
+    std::array<VkDescriptorSetLayout, NUM_GRAPHICS_DESCRIPTOR_SETS> set_layouts{};
+    for (u32 set = 0; set < num_descriptor_sets; ++set) {
+        set_layouts[set] = *descriptor_sets[set].layout;
+    }
+    pipeline_layout = builders[0].CreatePipelineLayout(
+        std::span<const VkDescriptorSetLayout>(set_layouts.data(), num_descriptor_sets));
+
+    std::array<size_t, NUM_GRAPHICS_DESCRIPTOR_SETS> first_stage{};
+    std::array<size_t, NUM_GRAPHICS_DESCRIPTOR_SETS> num_stages{};
+    u32 entry{};
+    for (size_t stage = 0; stage < NUM_STAGES; ++stage) {
+        const u32 set{GraphicsDescriptorSet(stage)};
+        ASSERT(num_stages[set] == 0 || first_stage[set] + num_stages[set] == stage);
+        if (num_stages[set] == 0) {
+            first_stage[set] = stage;
+            descriptor_sets[set].first_entry = entry;
+        }
+        ++num_stages[set];
+        const u32 stage_entries{NumDescriptorEntries(stage_infos[stage])};
+        descriptor_sets[set].num_entries += stage_entries;
+        entry += stage_entries;
+    }
     if (!uses_descriptor_buffer) {
-        descriptor_update_template =
-            builder.CreateTemplate(set_layout, *pipeline_layout, uses_push_descriptor);
-        if (!uses_push_descriptor) {
-            descriptor_allocator =
-                descriptor_pool.Allocator(device, scheduler, set_layout, stage_infos);
+        for (u32 set = 0; set < num_descriptor_sets; ++set) {
+            DescriptorSetState& state{descriptor_sets[set]};
+            state.update_template = builders[set].CreateTemplate(
+                *state.layout, *pipeline_layout, uses_push_descriptor, set);
+            if (!uses_push_descriptor) {
+                state.allocator = descriptor_pool.Allocator(
+                    device, scheduler, *state.layout,
+                    std::span<const Shader::Info>(stage_infos).subspan(first_stage[set],
+                                                                       num_stages[set]));
+            }
         }
     }
 
@@ -833,7 +875,7 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
 
     VkDeviceSize descriptor_buffer_offset{};
     u32 descriptor_buffer_chunk{};
-    if (descriptor_set_layout && uses_descriptor_buffer) {
+    if (num_descriptor_sets != 0 && uses_descriptor_buffer) {
         const auto* const entries = static_cast<const DescriptorUpdateEntry*>(descriptor_data);
         const bool reuse_allocation =
             last_descriptor_buffer_generation == descriptor_buffer_ring.CurrentGeneration() &&
@@ -880,7 +922,7 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
     const bool update_rescaling{scheduler.UpdateRescaling(is_rescaling)};
     const bool bind_pipeline{scheduler.UpdateGraphicsPipeline(this)};
     const bool bind_descriptor_buffer{
-        descriptor_set_layout && uses_descriptor_buffer &&
+        num_descriptor_sets != 0 && uses_descriptor_buffer &&
         scheduler.UpdateDescriptorBufferChunk(descriptor_buffer_chunk)};
 
     // Log graphics pipeline binding
@@ -891,7 +933,7 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
     }
 
     bool update_descriptors = true;
-    if (descriptor_set_layout && !uses_push_descriptor && !uses_descriptor_buffer) {
+    if (num_descriptor_sets != 0 && !uses_push_descriptor && !uses_descriptor_buffer) {
         const auto* const entries = static_cast<const DescriptorUpdateEntry*>(descriptor_data);
         update_descriptors =
             bind_pipeline || last_descriptor_payload.size() != num_descriptor_entries ||
@@ -933,7 +975,7 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
                                  RENDERAREA_LAYOUT_OFFSET, sizeof(render_area_data),
                                  &render_area_data);
         }
-        if (!descriptor_set_layout) {
+        if (num_descriptor_sets == 0) {
             return;
         }
         if (uses_descriptor_buffer) {
@@ -941,14 +983,21 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
             cmdbuf.SetDescriptorBufferOffsetsEXT(VK_PIPELINE_BIND_POINT_GRAPHICS, *pipeline_layout,
                                                  0, buffer_index, descriptor_buffer_offset);
         } else if (uses_push_descriptor) {
-            cmdbuf.PushDescriptorSetWithTemplateKHR(*descriptor_update_template, *pipeline_layout,
-                                                    0, descriptor_data);
+            cmdbuf.PushDescriptorSetWithTemplateKHR(*descriptor_sets[0].update_template,
+                                                    *pipeline_layout, 0, descriptor_data);
         } else if (update_descriptors) {
-            const VkDescriptorSet descriptor_set{descriptor_allocator.Commit()};
+            const auto* const entries = static_cast<const DescriptorUpdateEntry*>(descriptor_data);
             const vk::Device& dev{device.GetLogical()};
-            dev.UpdateDescriptorSet(descriptor_set, *descriptor_update_template, descriptor_data);
+            std::array<VkDescriptorSet, NUM_GRAPHICS_DESCRIPTOR_SETS> sets;
+            for (u32 set = 0; set < num_descriptor_sets; ++set) {
+                DescriptorSetState& state{descriptor_sets[set]};
+                sets[set] = state.allocator.Commit();
+                dev.UpdateDescriptorSet(sets[set], *state.update_template,
+                                        entries + state.first_entry);
+            }
             cmdbuf.BindDescriptorSets(VK_PIPELINE_BIND_POINT_GRAPHICS, *pipeline_layout, 0,
-                                      descriptor_set, nullptr);
+                                      vk::Span<VkDescriptorSet>(sets.data(), num_descriptor_sets),
+                                      nullptr);
         }
     });
     return true;

@@ -8,6 +8,8 @@
 namespace Shader::Backend {
 
 struct Bindings {
+    /// Descriptor set that the resources of the stage being emitted go to.
+    u32 descriptor_set{};
     u32 unified{};
     u32 uniform_buffer{};
     u32 storage_buffer{};

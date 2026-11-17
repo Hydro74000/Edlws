@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <optional>
+#include <span>
 
 #include <boost/container/small_vector.hpp>
 
@@ -143,9 +144,22 @@ inline void WriteDescriptorBuffer(const Device& device, const DescriptorBufferLa
            Shader::NumDescriptors(info.image_descriptors);
 }
 
+/// Descriptor sets a graphics pipeline binds.
+inline constexpr size_t NUM_GRAPHICS_DESCRIPTOR_SETS = 1;
+
+/// The descriptor set of a graphics stage's resources. Stages of one set are consecutive, so each
+/// set's descriptors are one range of the draw's descriptor payload.
+[[nodiscard]] constexpr u32 GraphicsDescriptorSet([[maybe_unused]] size_t stage_index) noexcept {
+    return 0;
+}
+
 class DescriptorLayoutBuilder {
 public:
     DescriptorLayoutBuilder(const Device& device_) : device{&device_} {}
+
+    bool Empty() const noexcept {
+        return bindings.empty();
+    }
 
     bool CanUsePushDescriptor() const noexcept {
         if (!device->IsKhrPushDescriptorSupported() ||
@@ -220,7 +234,7 @@ public:
 
     vk::DescriptorUpdateTemplate CreateTemplate(VkDescriptorSetLayout descriptor_set_layout,
                                                 VkPipelineLayout pipeline_layout,
-                                                bool use_push_descriptor) const {
+                                                bool use_push_descriptor, u32 set = 0) const {
         if (entries.empty()) {
             return nullptr;
         }
@@ -238,11 +252,17 @@ public:
             .pipelineBindPoint =
                 is_compute ? VK_PIPELINE_BIND_POINT_COMPUTE : VK_PIPELINE_BIND_POINT_GRAPHICS,
             .pipelineLayout = pipeline_layout,
-            .set = 0,
+            .set = set,
         });
     }
 
     vk::PipelineLayout CreatePipelineLayout(VkDescriptorSetLayout descriptor_set_layout) const {
+        return CreatePipelineLayout(bindings.empty() ? std::span<const VkDescriptorSetLayout>{}
+                                                     : std::span{&descriptor_set_layout, 1});
+    }
+
+    vk::PipelineLayout CreatePipelineLayout(
+        std::span<const VkDescriptorSetLayout> set_layouts) const {
         using Shader::Backend::SPIRV::RenderAreaLayout;
         using Shader::Backend::SPIRV::RescalingLayout;
         const u32 size_offset = is_compute ? sizeof(RescalingLayout::down_factor) : 0u;
@@ -257,8 +277,8 @@ public:
             .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
             .pNext = nullptr,
             .flags = 0,
-            .setLayoutCount = descriptor_set_layout ? 1U : 0U,
-            .pSetLayouts = bindings.empty() ? nullptr : &descriptor_set_layout,
+            .setLayoutCount = static_cast<u32>(set_layouts.size()),
+            .pSetLayouts = set_layouts.empty() ? nullptr : set_layouts.data(),
             .pushConstantRangeCount = 1,
             .pPushConstantRanges = &range,
         });

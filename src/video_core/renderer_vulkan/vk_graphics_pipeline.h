@@ -229,10 +229,18 @@ private:
     bool texture_memo_eligible{};
     VideoCommon::SampledTextureMemo texture_memo;
 
-    vk::DescriptorSetLayout descriptor_set_layout;
-    DescriptorAllocator descriptor_allocator;
+    struct DescriptorSetState {
+        vk::DescriptorSetLayout layout;
+        vk::DescriptorUpdateTemplate update_template;
+        DescriptorAllocator allocator;
+        /// Range of this set's stages in the draw's descriptor payload.
+        u32 first_entry{};
+        u32 num_entries{};
+    };
+    std::array<DescriptorSetState, NUM_GRAPHICS_DESCRIPTOR_SETS> descriptor_sets;
+    /// Sets in the pipeline layout: up to the last one with resources.
+    u32 num_descriptor_sets{};
     vk::PipelineLayout pipeline_layout;
-    vk::DescriptorUpdateTemplate descriptor_update_template;
     static constexpr size_t NUM_LIBRARIES = 4;
     Common::ThreadWorker* library_worker{};
     /// The libraries a pipeline from libraries was linked from, destroyed after it.
