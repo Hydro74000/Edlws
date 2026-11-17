@@ -517,6 +517,11 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
       use_shader_reuse{IsShaderReuseAllowed()},
       translation_wait_budget{GetTranslationWaitBudget()},
       num_translation_threads{use_async_translation ? GetTotalTranslationWorkers() : 0},
+      library_workers(device.IsExtGraphicsPipelineLibraryEnabled() &&
+                              !device.HasBrokenParallelShaderCompiling()
+                          ? GetTotalPipelineWorkers() + 1
+                          : 0,
+                      "VkLibraryBuilder", {}, Common::ThreadPlacement::Background),
       workers(device.HasBrokenParallelShaderCompiling() ? 1ULL : GetTotalPipelineWorkers(),
               "VkPipelineBuilder", {}, Common::ThreadPlacement::Background),
       serialization_thread(1, "VkPipelineSerialization", {},
@@ -1414,10 +1419,15 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
         }
     }
     Common::ThreadWorker* const thread_worker{build_in_parallel ? &workers : nullptr};
+    Common::ThreadWorker* const library_worker{
+        device.IsExtGraphicsPipelineLibraryEnabled() && !device.HasBrokenParallelShaderCompiling()
+            ? &library_workers
+            : nullptr};
     return std::make_unique<GraphicsPipeline>(
         scheduler, buffer_cache, texture_cache, vulkan_pipeline_cache, &shader_notify, device,
-        descriptor_pool, guest_descriptor_queue, descriptor_buffer_ring, thread_worker, statistics,
-        render_pass_cache, key, shaders->modules, shaders->InfoPointers());
+        descriptor_pool, guest_descriptor_queue, descriptor_buffer_ring, thread_worker,
+        library_worker, statistics, render_pass_cache, key, shaders->modules,
+        shaders->InfoPointers());
 
 } catch (const Shader::Exception& exception) {
     auto hash = key.Hash();

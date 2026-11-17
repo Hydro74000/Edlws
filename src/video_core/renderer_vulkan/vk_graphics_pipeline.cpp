@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <future>
 #include <optional>
 #include <span>
 
@@ -314,14 +315,15 @@ GraphicsPipeline::GraphicsPipeline(
     vk::PipelineCache& pipeline_cache_, VideoCore::ShaderNotify* shader_notify,
     const Device& device_, DescriptorPool& descriptor_pool,
     GuestDescriptorQueue& guest_descriptor_queue_, DescriptorBufferRing& descriptor_buffer_ring_,
-    Common::ThreadWorker* worker_thread,
+    Common::ThreadWorker* worker_thread, Common::ThreadWorker* library_worker_,
     PipelineStatistics* pipeline_statistics, RenderPassCache& render_pass_cache,
     const GraphicsPipelineCacheKey& key_, std::shared_ptr<const GraphicsShaderModules> modules,
     const std::array<const Shader::Info*, NUM_STAGES>& infos)
     : key{key_}, device{device_}, texture_cache{texture_cache_}, buffer_cache{buffer_cache_},
       pipeline_cache(pipeline_cache_), scheduler{scheduler_},
       guest_descriptor_queue{guest_descriptor_queue_},
-      descriptor_buffer_ring{descriptor_buffer_ring_}, spv_modules{std::move(modules)} {
+      descriptor_buffer_ring{descriptor_buffer_ring_}, spv_modules{std::move(modules)},
+      library_worker{library_worker_} {
     if (shader_notify) {
         shader_notify->MarkShaderBuilding();
     }
@@ -1451,9 +1453,32 @@ vk::Pipeline GraphicsPipeline::MakeFromLibraries(VkRenderPass render_pass) {
         VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_OUTPUT_INTERFACE_BIT_EXT,
     };
     try {
+        libraries[0] = MakePipeline(render_pass, subsets[0]);
+        // The fragment shader library compiles on another thread while this one compiles the
+        // pre-rasterization library: the pipeline costs the longer of the two, not their sum.
+        std::optional<std::future<void>> fragment;
+        if (library_worker) {
+            auto task{std::make_shared<std::packaged_task<void()>>(
+                [this, render_pass] { libraries[2] = MakePipeline(render_pass, subsets[2]); })};
+            fragment = task->get_future();
+            library_worker->QueueWork([task] { (*task)(); });
+        }
+        try {
+            libraries[1] = MakePipeline(render_pass, subsets[1]);
+        } catch (...) {
+            if (fragment) {
+                fragment->wait();
+            }
+            throw;
+        }
+        if (fragment) {
+            fragment->get();
+        } else {
+            libraries[2] = MakePipeline(render_pass, subsets[2]);
+        }
+        libraries[3] = MakePipeline(render_pass, subsets[3]);
         std::array<VkPipeline, NUM_LIBRARIES> handles{};
         for (size_t index = 0; index < NUM_LIBRARIES; ++index) {
-            libraries[index] = MakePipeline(render_pass, subsets[index]);
             handles[index] = *libraries[index];
         }
         const VkPipelineLibraryCreateInfoKHR library_info{
@@ -1492,9 +1517,11 @@ vk::Pipeline GraphicsPipeline::MakeFromLibraries(VkRenderPass render_pass) {
         LOG_WARNING(Render_Vulkan,
                     "Graphics pipeline {:016X} from libraries failed ({}), building it whole",
                     key.Hash(), exception.what());
-        libraries = {};
-        return MakePipeline(render_pass);
+    } catch (const std::future_error&) {
+        // The library worker stopped before running the task (shutdown).
     }
+    libraries = {};
+    return MakePipeline(render_pass);
 }
 
 void GraphicsPipeline::Validate() {
