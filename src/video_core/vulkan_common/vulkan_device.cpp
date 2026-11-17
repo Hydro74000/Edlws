@@ -1315,6 +1315,11 @@ bool Device::GetSuitability(bool requires_swapchain) {
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_BUFFER_PROPERTIES_EXT;
         SetNext(next, properties.descriptor_buffer);
     }
+    if (extensions.graphics_pipeline_library) {
+        properties.graphics_pipeline_library.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GRAPHICS_PIPELINE_LIBRARY_PROPERTIES_EXT;
+        SetNext(next, properties.graphics_pipeline_library);
+    }
     if (extensions.subgroup_size_control || features.subgroup_size_control.subgroupSizeControl) {
         properties.subgroup_size_control.sType =
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_PROPERTIES;
@@ -1603,6 +1608,22 @@ void Device::RemoveUnsuitableExtensions() {
         RemoveExtensionFeature(extensions.pipeline_executable_properties,
                                features.pipeline_executable_properties,
                                VK_KHR_PIPELINE_EXECUTABLE_PROPERTIES_EXTENSION_NAME);
+    }
+
+    // VK_EXT_graphics_pipeline_library: simple graphics pipelines are built from fast-linked
+    // libraries, so that their vertex and fragment stages compile at the same time. Only on the
+    // driver it has been validated with in games so far; the others keep monolithic pipelines.
+    const bool library_validated = GetDriverID() == VK_DRIVER_ID_NVIDIA_PROPRIETARY;
+    extensions.graphics_pipeline_library =
+        features.graphics_pipeline_library.graphicsPipelineLibrary &&
+        properties.graphics_pipeline_library.graphicsPipelineLibraryFastLinking &&
+        extensions.pipeline_library && library_validated &&
+        Settings::values.use_graphics_pipeline_library.GetValue();
+    if (!extensions.graphics_pipeline_library) {
+        RemoveExtensionFeature(extensions.graphics_pipeline_library,
+                               features.graphics_pipeline_library,
+                               VK_EXT_GRAPHICS_PIPELINE_LIBRARY_EXTENSION_NAME);
+        RemoveExtension(extensions.pipeline_library, VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME);
     }
 
     // VK_EXT_mesh_shader: Switch 2 titles draw some geometry with task and mesh programs. Only
