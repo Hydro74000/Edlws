@@ -405,6 +405,25 @@ GraphicsPipeline::GraphicsPipeline(
     }
     pipeline_layout = builders[0].CreatePipelineLayout(
         std::span<const VkDescriptorSetLayout>(set_layouts.data(), num_descriptor_sets));
+    if (UsesLibraries()) {
+        // A set is in the layout of its stage's library only, so a library compiles the same
+        // whatever the other stage's resources are. Every set is in one of the two layouts.
+        std::array<VkDescriptorSetLayout, NUM_GRAPHICS_DESCRIPTOR_SETS> pre_rasterization_sets{};
+        std::array<VkDescriptorSetLayout, NUM_GRAPHICS_DESCRIPTOR_SETS> fragment_sets{};
+        for (u32 set = 0; set < num_descriptor_sets; ++set) {
+            auto& sets{set == GraphicsDescriptorSet(NUM_STAGES - 1) ? fragment_sets
+                                                                    : pre_rasterization_sets};
+            sets[set] = set_layouts[set];
+        }
+        const auto make = [&](const auto& sets) {
+            return builders[0].CreatePipelineLayout(
+                std::span<const VkDescriptorSetLayout>(sets.data(), num_descriptor_sets),
+                VK_PIPELINE_LAYOUT_CREATE_INDEPENDENT_SETS_BIT_EXT);
+        };
+        independent_layout = make(set_layouts);
+        library_layouts[0] = make(pre_rasterization_sets);
+        library_layouts[1] = make(fragment_sets);
+    }
 
     std::array<size_t, NUM_GRAPHICS_DESCRIPTOR_SETS> first_stage{};
     std::array<size_t, NUM_GRAPHICS_DESCRIPTOR_SETS> num_stages{};
@@ -426,6 +445,11 @@ GraphicsPipeline::GraphicsPipeline(
             DescriptorSetState& state{descriptor_sets[set]};
             state.update_template = builders[set].CreateTemplate(
                 *state.layout, *pipeline_layout, uses_push_descriptor, set);
+            if (uses_push_descriptor && independent_layout) {
+                // A push template takes the layout it is pushed with.
+                independent_push_template = builders[set].CreateTemplate(
+                    *state.layout, *independent_layout, uses_push_descriptor, set);
+            }
             if (!uses_push_descriptor && !builders[set].Empty()) {
                 state.allocator = descriptor_pool.Allocator(
                     device, scheduler, *state.layout,
@@ -434,6 +458,10 @@ GraphicsPipeline::GraphicsPipeline(
             }
         }
     }
+
+    bound_layout = *pipeline_layout;
+    bound_push_template = num_descriptor_sets != 0 ? *descriptor_sets[0].update_template
+                                                   : VkDescriptorUpdateTemplate{};
 
     const bool on_parallel_worker{worker_thread != nullptr};
     auto func{[this, shader_notify, &render_pass_cache, pipeline_statistics, on_parallel_worker] {
@@ -447,6 +475,10 @@ GraphicsPipeline::GraphicsPipeline(
             const PipelineStats::ScopedTimer stats_timer{PipelineStats::Kind::Graphics,
                                                          PipelineStats::Stage::Driver};
             pipeline = UsesLibraries() ? MakeFromLibraries(render_pass) : MakePipeline(render_pass);
+            if (libraries[1]) {
+                bound_layout = *independent_layout;
+                bound_push_template = *independent_push_template;
+            }
         } catch (const vk::Exception& exception) {
             LOG_CRITICAL(Render_Vulkan, "Graphics pipeline build failed: {}", exception.what());
             std::scoped_lock lock{build_mutex};
@@ -961,18 +993,18 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
             }
             cmdbuf.BindPipeline(VK_PIPELINE_BIND_POINT_GRAPHICS, *pipeline);
         }
-        cmdbuf.PushConstants(*pipeline_layout, VK_SHADER_STAGE_ALL_GRAPHICS,
+        cmdbuf.PushConstants(bound_layout, VK_SHADER_STAGE_ALL_GRAPHICS,
                              RESCALING_LAYOUT_WORDS_OFFSET, sizeof(rescaling_data),
                              rescaling_data.data());
         if (update_rescaling) {
             const f32 config_down_factor{Settings::values.resolution_info.down_factor};
             const f32 scale_down_factor{is_rescaling ? config_down_factor : 1.0f};
-            cmdbuf.PushConstants(*pipeline_layout, VK_SHADER_STAGE_ALL_GRAPHICS,
+            cmdbuf.PushConstants(bound_layout, VK_SHADER_STAGE_ALL_GRAPHICS,
                                  RESCALING_LAYOUT_DOWN_FACTOR_OFFSET, sizeof(scale_down_factor),
                                  &scale_down_factor);
         }
         if (uses_render_area) {
-            cmdbuf.PushConstants(*pipeline_layout, VK_SHADER_STAGE_ALL_GRAPHICS,
+            cmdbuf.PushConstants(bound_layout, VK_SHADER_STAGE_ALL_GRAPHICS,
                                  RENDERAREA_LAYOUT_OFFSET, sizeof(render_area_data),
                                  &render_area_data);
         }
@@ -981,11 +1013,11 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
         }
         if (uses_descriptor_buffer) {
             const u32 buffer_index{};
-            cmdbuf.SetDescriptorBufferOffsetsEXT(VK_PIPELINE_BIND_POINT_GRAPHICS, *pipeline_layout,
+            cmdbuf.SetDescriptorBufferOffsetsEXT(VK_PIPELINE_BIND_POINT_GRAPHICS, bound_layout,
                                                  0, buffer_index, descriptor_buffer_offset);
         } else if (uses_push_descriptor) {
-            cmdbuf.PushDescriptorSetWithTemplateKHR(*descriptor_sets[0].update_template,
-                                                    *pipeline_layout, 0, descriptor_data);
+            cmdbuf.PushDescriptorSetWithTemplateKHR(bound_push_template,
+                                                    bound_layout, 0, descriptor_data);
         } else if (update_descriptors) {
             const auto* const entries = static_cast<const DescriptorUpdateEntry*>(descriptor_data);
             const vk::Device& dev{device.GetLogical()};
@@ -998,7 +1030,7 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
                 if (!state.update_template) {
                     if (count != 0) {
                         cmdbuf.BindDescriptorSets(VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                                  *pipeline_layout, first,
+                                                  bound_layout, first,
                                                   vk::Span<VkDescriptorSet>(sets.data(), count),
                                                   nullptr);
                     }
@@ -1014,7 +1046,7 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
                 ++count;
             }
             if (count != 0) {
-                cmdbuf.BindDescriptorSets(VK_PIPELINE_BIND_POINT_GRAPHICS, *pipeline_layout, first,
+                cmdbuf.BindDescriptorSets(VK_PIPELINE_BIND_POINT_GRAPHICS, bound_layout, first,
                                           vk::Span<VkDescriptorSet>(sets.data(), count), nullptr);
             }
         }
@@ -1483,7 +1515,10 @@ vk::Pipeline GraphicsPipeline::MakePipeline(VkRenderPass render_pass,
         .pDepthStencilState = has_fragment ? &depth_stencil_ci : nullptr,
         .pColorBlendState = has_output ? &color_blend_ci : nullptr,
         .pDynamicState = &dynamic_state_ci,
-        .layout = has_pre_rasterization || has_fragment ? *pipeline_layout : VkPipelineLayout{},
+        .layout = !is_library              ? *pipeline_layout
+                  : has_pre_rasterization ? *library_layouts[0]
+                  : has_fragment          ? *library_layouts[1]
+                                          : VkPipelineLayout{},
         .renderPass = render_pass,
         .subpass = 0,
         .basePipelineHandle = nullptr,
@@ -1574,7 +1609,7 @@ vk::Pipeline GraphicsPipeline::MakeFromLibraries(VkRenderPass render_pass) {
                 .pDepthStencilState = nullptr,
                 .pColorBlendState = nullptr,
                 .pDynamicState = nullptr,
-                .layout = *pipeline_layout,
+                .layout = *independent_layout,
                 .renderPass = render_pass,
                 .subpass = 0,
                 .basePipelineHandle = nullptr,

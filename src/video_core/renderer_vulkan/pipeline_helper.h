@@ -275,8 +275,8 @@ public:
                                                      : std::span{&descriptor_set_layout, 1});
     }
 
-    vk::PipelineLayout CreatePipelineLayout(
-        std::span<const VkDescriptorSetLayout> set_layouts) const {
+    vk::PipelineLayout CreatePipelineLayout(std::span<const VkDescriptorSetLayout> set_layouts,
+                                            VkPipelineLayoutCreateFlags flags = 0) const {
         using Shader::Backend::SPIRV::RenderAreaLayout;
         using Shader::Backend::SPIRV::RescalingLayout;
         const u32 size_offset = is_compute ? sizeof(RescalingLayout::down_factor) : 0u;
@@ -290,7 +290,7 @@ public:
         return device->GetLogical().CreatePipelineLayout({
             .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
             .pNext = nullptr,
-            .flags = 0,
+            .flags = flags,
             .setLayoutCount = static_cast<u32>(set_layouts.size()),
             .pSetLayouts = set_layouts.empty() ? nullptr : set_layouts.data(),
             .pushConstantRangeCount = 1,
