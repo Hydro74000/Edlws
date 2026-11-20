@@ -348,7 +348,12 @@ class RescalingPushConstant {
 public:
     explicit RescalingPushConstant() noexcept {}
 
+    // Past the end of its set's words, a texture or image has no bit: the shader sees it as not
+    // rescaled.
     void PushTexture(bool is_rescaled) noexcept {
+        if (texture_ptr == texture_end) {
+            return;
+        }
         *texture_ptr |= is_rescaled ? texture_bit : 0u;
         texture_bit <<= 1u;
         if (texture_bit == 0u) {
@@ -358,6 +363,9 @@ public:
     }
 
     void PushImage(bool is_rescaled) noexcept {
+        if (image_ptr == image_end) {
+            return;
+        }
         *image_ptr |= is_rescaled ? image_bit : 0u;
         image_bit <<= 1u;
         if (image_bit == 0u) {
@@ -374,9 +382,12 @@ public:
         current_set = set;
         const u32 texture_base{GraphicsTextureScalingBase(set)};
         texture_ptr = words.data() + texture_base / 32;
+        texture_end = words.data() + GraphicsTextureScalingBase(set + 1) / 32;
         texture_bit = 1u << (texture_base % 32);
+        u32* const images{words.data() + Shader::Backend::SPIRV::NUM_TEXTURE_SCALING_WORDS};
         const u32 image_base{GraphicsImageScalingBase(set)};
-        image_ptr = words.data() + Shader::Backend::SPIRV::NUM_TEXTURE_SCALING_WORDS + image_base / 32;
+        image_ptr = images + image_base / 32;
+        image_end = images + GraphicsImageScalingBase(set + 1) / 32;
         image_bit = 1u << (image_base % 32);
     }
 
@@ -387,7 +398,9 @@ public:
 private:
     std::array<u32, NUM_TEXTURE_AND_IMAGE_SCALING_WORDS> words{};
     u32* texture_ptr{words.data()};
+    u32* texture_end{words.data() + Shader::Backend::SPIRV::NUM_TEXTURE_SCALING_WORDS};
     u32* image_ptr{words.data() + Shader::Backend::SPIRV::NUM_TEXTURE_SCALING_WORDS};
+    u32* image_end{words.data() + Shader::Backend::SPIRV::NUM_TEXTURE_AND_IMAGE_SCALING_WORDS};
     u32 texture_bit{1u};
     u32 image_bit{1u};
     u32 current_set{};

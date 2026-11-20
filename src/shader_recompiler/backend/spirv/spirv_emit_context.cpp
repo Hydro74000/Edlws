@@ -475,6 +475,8 @@ EmitContext::EmitContext(const Profile& profile_, const RuntimeInfo& runtime_inf
     : Sirit::Module(profile_.supported_spirv), profile{profile_}, runtime_info{runtime_info_},
       stage{program.stage}, texture_rescaling_index{bindings.texture_scaling_index},
       image_rescaling_index{bindings.image_scaling_index},
+      texture_rescaling_end{std::min(bindings.texture_scaling_end, NUM_TEXTURE_SCALING_WORDS * 32)},
+      image_rescaling_end{std::min(bindings.image_scaling_end, NUM_IMAGE_SCALING_WORDS * 32)},
       descriptor_set{bindings.descriptor_set} {
     const bool is_unified{profile.unified_descriptor_binding};
     u32& uniform_binding{is_unified ? bindings.unified : bindings.uniform_buffer};
@@ -496,6 +498,8 @@ EmitContext::EmitContext(const Profile& profile_, const RuntimeInfo& runtime_inf
     DefineImageBuffers(program.info, image_binding);
     DefineTextures(program.info, texture_binding, bindings.texture_scaling_index);
     DefineImages(program.info, image_binding, bindings.image_scaling_index);
+    texture_rescaling_overflows = bindings.texture_scaling_index > texture_rescaling_end;
+    image_rescaling_overflows = bindings.image_scaling_index > image_rescaling_end;
     DefineAttributeMemAccess(program.info);
     DefineWriteStorageCasLoopFunction(program.info);
     DefineGlobalMemoryFunctions(program);

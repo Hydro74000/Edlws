@@ -1585,7 +1585,16 @@ std::shared_ptr<ReusableShaders> PipelineCache::BuildGraphicsShaders(
     auto modules{std::make_shared<GraphicsShaderModules>()};
 
     const Shader::IR::Program* previous_stage{};
-    Shader::Backend::Bindings binding;
+    const auto set_bindings{[](u32 set) {
+        return Shader::Backend::Bindings{
+            .descriptor_set = set,
+            .texture_scaling_index = GraphicsTextureScalingBase(set),
+            .image_scaling_index = GraphicsImageScalingBase(set),
+            .texture_scaling_end = GraphicsTextureScalingBase(set + 1),
+            .image_scaling_end = GraphicsImageScalingBase(set + 1),
+        };
+    }};
+    Shader::Backend::Bindings binding{set_bindings(0)};
     for (size_t index = uses_vertex_a && uses_vertex_b ? 1 : 0; index < Maxwell::MaxShaderProgram;
          ++index) {
         const bool is_emulated_stage = layer_source_program != nullptr &&
@@ -1602,17 +1611,20 @@ std::shared_ptr<ReusableShaders> PipelineCache::BuildGraphicsShaders(
         const auto runtime_info{MakeRuntimeInfo(programs, key, program, previous_stage)};
         ConvertLegacyToGeneric(program, runtime_info);
         if (const u32 set{GraphicsDescriptorSet(stage_index)}; set != binding.descriptor_set) {
-            binding = Shader::Backend::Bindings{
-                .descriptor_set = set,
-                .texture_scaling_index = GraphicsTextureScalingBase(set),
-                .image_scaling_index = GraphicsImageScalingBase(set),
-            };
+            binding = set_bindings(set);
         }
         std::vector<u32> code;
         {
             const PipelineStats::ScopedTimer emit_timer{PipelineStats::Kind::Graphics,
                                                         PipelineStats::Stage::Emit};
             code = EmitSPIRV(profile, runtime_info, program, binding);
+        }
+        if (binding.texture_scaling_index > binding.texture_scaling_end ||
+            binding.image_scaling_index > binding.image_scaling_end) {
+            LOG_WARNING(Render_Vulkan,
+                        "Shader {:016X}: more textures or images in descriptor set {} than "
+                        "rescaling bits, the last ones are never rescaled",
+                        key.unique_hashes[index], binding.descriptor_set);
         }
         device.SaveShader(code);
         {

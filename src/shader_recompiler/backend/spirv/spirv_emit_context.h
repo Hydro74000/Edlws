@@ -320,6 +320,10 @@ public:
     u32 rescaling_downfactor_member_index{};
     u32 texture_rescaling_index{};
     u32 image_rescaling_index{};
+    u32 texture_rescaling_end{};
+    u32 image_rescaling_end{};
+    bool texture_rescaling_overflows{};
+    bool image_rescaling_overflows{};
     u32 descriptor_set{};
 
     Id render_area_push_constant{};

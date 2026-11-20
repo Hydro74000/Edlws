@@ -393,13 +393,19 @@ Id GatherDynamicPtp(EmitContext& ctx, bool is_integer, Id result_type, const IR:
     return ctx.OpCompositeConstruct(result_type, std::span<const Id>{texels.data(), texels.size()});
 }
 
-Id IsScaled(EmitContext& ctx, const IR::Value& index, Id member_index, u32 base_index) {
+// Textures or images past end_index have no rescaling bit: they are never seen as rescaled.
+Id IsScaled(EmitContext& ctx, const IR::Value& index, Id member_index, u32 base_index,
+            u32 end_index, bool may_overflow) {
     const Id push_constant_u32{ctx.TypePointer(spv::StorageClass::PushConstant, ctx.U32[1])};
     Id bit{};
+    Id in_range{};
     if (index.IsImmediate()) {
         // Use BitwiseAnd instead of BitfieldExtract for better codegen on Nvidia OpenGL.
         // LOP32I.NZ is used to set the predicate rather than BFE+ISETP.
         const u32 index_value{index.U32() + base_index};
+        if (index_value >= end_index) {
+            return ctx.false_value;
+        }
         const Id word_index{ctx.Const(index_value / 32)};
         const Id bit_index_mask{ctx.Const(1u << (index_value % 32))};
         const Id pointer{ctx.OpAccessChain(push_constant_u32, ctx.rescaling_push_constants,
@@ -411,6 +417,10 @@ Id IsScaled(EmitContext& ctx, const IR::Value& index, Id member_index, u32 base_
         if (base_index != 0) {
             index_value = ctx.OpIAdd(ctx.U32[1], index_value, ctx.Const(base_index));
         }
+        if (may_overflow) {
+            in_range = ctx.OpULessThan(ctx.U1, index_value, ctx.Const(end_index));
+            index_value = ctx.OpSelect(ctx.U32[1], in_range, index_value, ctx.u32_zero_value);
+        }
         const Id word_index{ctx.OpShiftRightLogical(ctx.U32[1], index_value, ctx.Const(5u))};
         const Id bit_index{ctx.OpBitwiseAnd(ctx.U32[1], index_value, ctx.Const(31u))};
         const Id pointer{ctx.OpAccessChain(push_constant_u32, ctx.rescaling_push_constants,
@@ -419,7 +429,8 @@ Id IsScaled(EmitContext& ctx, const IR::Value& index, Id member_index, u32 base_
         const Id bit_index_mask{ctx.OpShiftLeftLogical(ctx.U32[1], ctx.Const(1u), bit_index)};
         bit = ctx.OpBitwiseAnd(ctx.U32[1], word, bit_index_mask);
     }
-    return ctx.OpINotEqual(ctx.U1, bit, ctx.u32_zero_value);
+    const Id is_scaled{ctx.OpINotEqual(ctx.U1, bit, ctx.u32_zero_value)};
+    return Sirit::ValidId(in_range) ? ctx.OpLogicalAnd(ctx.U1, in_range, is_scaled) : is_scaled;
 }
 
 Id BitTest(EmitContext& ctx, Id mask, Id bit) {
@@ -814,7 +825,8 @@ void EmitImageWrite(EmitContext& ctx, IR::Inst* inst, const IR::Value& index, Id
 Id EmitIsTextureScaled(EmitContext& ctx, const IR::Value& index) {
     if (ctx.profile.unified_descriptor_binding) {
         const Id member_index{ctx.Const(ctx.rescaling_textures_member_index)};
-        return IsScaled(ctx, index, member_index, ctx.texture_rescaling_index);
+        return IsScaled(ctx, index, member_index, ctx.texture_rescaling_index,
+                        ctx.texture_rescaling_end, ctx.texture_rescaling_overflows);
     } else {
         const Id composite{ctx.OpLoad(ctx.F32[4], ctx.rescaling_uniform_constant)};
         const Id mask_f32{ctx.OpCompositeExtract(ctx.F32[1], composite, 0u)};
@@ -826,7 +838,8 @@ Id EmitIsTextureScaled(EmitContext& ctx, const IR::Value& index) {
 Id EmitIsImageScaled(EmitContext& ctx, const IR::Value& index) {
     if (ctx.profile.unified_descriptor_binding) {
         const Id member_index{ctx.Const(ctx.rescaling_images_member_index)};
-        return IsScaled(ctx, index, member_index, ctx.image_rescaling_index);
+        return IsScaled(ctx, index, member_index, ctx.image_rescaling_index,
+                        ctx.image_rescaling_end, ctx.image_rescaling_overflows);
     } else {
         const Id composite{ctx.OpLoad(ctx.F32[4], ctx.rescaling_uniform_constant)};
         const Id mask_f32{ctx.OpCompositeExtract(ctx.F32[1], composite, 1u)};
