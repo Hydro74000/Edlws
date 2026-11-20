@@ -230,10 +230,28 @@ private:
     bool texture_memo_eligible{};
     VideoCommon::SampledTextureMemo texture_memo;
 
-    vk::DescriptorSetLayout descriptor_set_layout;
-    DescriptorAllocator descriptor_allocator;
+    struct DescriptorSetState {
+        vk::DescriptorSetLayout layout;
+        vk::DescriptorUpdateTemplate update_template;
+        DescriptorAllocator allocator;
+        /// Range of this set's stages in the draw's descriptor payload.
+        u32 first_entry{};
+        u32 num_entries{};
+    };
+    std::array<DescriptorSetState, NUM_GRAPHICS_DESCRIPTOR_SETS> descriptor_sets;
+    /// Sets in the pipeline layout: up to the last one with resources.
+    u32 num_descriptor_sets{};
+    /// See SplitsGraphicsDescriptorSets.
+    bool split_sets{};
     vk::PipelineLayout pipeline_layout;
-    vk::DescriptorUpdateTemplate descriptor_update_template;
+    /// For a pipeline built from libraries: each shader library has a layout with only its stage's
+    /// set, and the pipeline is linked, and its descriptors bound, with their union.
+    vk::PipelineLayout independent_layout;
+    std::array<vk::PipelineLayout, 2> library_layouts; ///< Pre-rasterization, fragment shader.
+    vk::DescriptorUpdateTemplate independent_push_template;
+    /// What draws bind with: pipeline_layout, or independent_layout once built from libraries.
+    VkPipelineLayout bound_layout{};
+    VkDescriptorUpdateTemplate bound_push_template{};
     static constexpr size_t NUM_LIBRARIES = 4;
     Common::ThreadWorker* library_worker{};
     /// The libraries a pipeline from libraries was linked from, destroyed after it.

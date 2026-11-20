@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <optional>
+#include <span>
 
 #include <boost/container/small_vector.hpp>
 
@@ -143,9 +144,41 @@ inline void WriteDescriptorBuffer(const Device& device, const DescriptorBufferLa
            Shader::NumDescriptors(info.image_descriptors);
 }
 
+/// Most descriptor sets a graphics pipeline binds: the pre-rasterization stages, then the fragment
+/// stage.
+inline constexpr size_t NUM_GRAPHICS_DESCRIPTOR_SETS = 2;
+
+/// Whether the fragment stage has a set of its own. Only pipeline libraries need it, each holding
+/// its own stage's set; elsewhere every stage stays in set 0, which keeps its descriptor transport
+/// (push descriptors or descriptor buffer).
+[[nodiscard]] inline bool SplitsGraphicsDescriptorSets(const Device& device) {
+    return device.IsExtGraphicsPipelineLibraryEnabled();
+}
+
+/// The descriptor set of a graphics stage's resources, numbered from binding 0 in each set, so a
+/// stage's descriptors don't depend on the other set's stages. Stages of one set are consecutive,
+/// so each set's descriptors are one range of the draw's descriptor payload.
+[[nodiscard]] constexpr u32 GraphicsDescriptorSet(size_t stage_index, bool split_sets) noexcept {
+    return split_sets && stage_index == 4 ? 1 : 0;
+}
+
+/// First rescaling bit of a set's textures and images: each set has its own share of the words.
+[[nodiscard]] constexpr u32 GraphicsTextureScalingBase(u32 set, bool split_sets) noexcept {
+    return set * Shader::Backend::SPIRV::NUM_TEXTURE_SCALING_WORDS * 32 /
+           (split_sets ? NUM_GRAPHICS_DESCRIPTOR_SETS : size_t{1});
+}
+[[nodiscard]] constexpr u32 GraphicsImageScalingBase(u32 set, bool split_sets) noexcept {
+    return set * Shader::Backend::SPIRV::NUM_IMAGE_SCALING_WORDS * 32 /
+           (split_sets ? NUM_GRAPHICS_DESCRIPTOR_SETS : size_t{1});
+}
+
 class DescriptorLayoutBuilder {
 public:
     DescriptorLayoutBuilder(const Device& device_) : device{&device_} {}
+
+    bool Empty() const noexcept {
+        return bindings.empty();
+    }
 
     bool CanUsePushDescriptor() const noexcept {
         if (!device->IsKhrPushDescriptorSupported() ||
@@ -184,9 +217,12 @@ public:
         return result;
     }
 
+    /// An empty builder makes no layout, unless allow_empty: a set below a set with resources
+    /// needs one in the pipeline layout.
     vk::DescriptorSetLayout CreateDescriptorSetLayout(bool use_push_descriptor,
-                                                      bool use_descriptor_buffer = false) const {
-        if (bindings.empty()) {
+                                                      bool use_descriptor_buffer = false,
+                                                      bool allow_empty = false) const {
+        if (bindings.empty() && !allow_empty) {
             return nullptr;
         }
         VkDescriptorSetLayoutCreateFlags flags = 0;
@@ -220,7 +256,7 @@ public:
 
     vk::DescriptorUpdateTemplate CreateTemplate(VkDescriptorSetLayout descriptor_set_layout,
                                                 VkPipelineLayout pipeline_layout,
-                                                bool use_push_descriptor) const {
+                                                bool use_push_descriptor, u32 set = 0) const {
         if (entries.empty()) {
             return nullptr;
         }
@@ -238,11 +274,17 @@ public:
             .pipelineBindPoint =
                 is_compute ? VK_PIPELINE_BIND_POINT_COMPUTE : VK_PIPELINE_BIND_POINT_GRAPHICS,
             .pipelineLayout = pipeline_layout,
-            .set = 0,
+            .set = set,
         });
     }
 
     vk::PipelineLayout CreatePipelineLayout(VkDescriptorSetLayout descriptor_set_layout) const {
+        return CreatePipelineLayout(bindings.empty() ? std::span<const VkDescriptorSetLayout>{}
+                                                     : std::span{&descriptor_set_layout, 1});
+    }
+
+    vk::PipelineLayout CreatePipelineLayout(std::span<const VkDescriptorSetLayout> set_layouts,
+                                            VkPipelineLayoutCreateFlags flags = 0) const {
         using Shader::Backend::SPIRV::RenderAreaLayout;
         using Shader::Backend::SPIRV::RescalingLayout;
         const u32 size_offset = is_compute ? sizeof(RescalingLayout::down_factor) : 0u;
@@ -256,9 +298,9 @@ public:
         return device->GetLogical().CreatePipelineLayout({
             .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
             .pNext = nullptr,
-            .flags = 0,
-            .setLayoutCount = descriptor_set_layout ? 1U : 0U,
-            .pSetLayouts = bindings.empty() ? nullptr : &descriptor_set_layout,
+            .flags = flags,
+            .setLayoutCount = static_cast<u32>(set_layouts.size()),
+            .pSetLayouts = set_layouts.empty() ? nullptr : set_layouts.data(),
             .pushConstantRangeCount = 1,
             .pPushConstantRanges = &range,
         });
@@ -314,7 +356,12 @@ class RescalingPushConstant {
 public:
     explicit RescalingPushConstant() noexcept {}
 
+    // Past the end of its set's words, a texture or image has no bit: the shader sees it as not
+    // rescaled.
     void PushTexture(bool is_rescaled) noexcept {
+        if (texture_ptr == texture_end) {
+            return;
+        }
         *texture_ptr |= is_rescaled ? texture_bit : 0u;
         texture_bit <<= 1u;
         if (texture_bit == 0u) {
@@ -324,12 +371,32 @@ public:
     }
 
     void PushImage(bool is_rescaled) noexcept {
+        if (image_ptr == image_end) {
+            return;
+        }
         *image_ptr |= is_rescaled ? image_bit : 0u;
         image_bit <<= 1u;
         if (image_bit == 0u) {
             image_bit = 1u;
             ++image_ptr;
         }
+    }
+
+    /// Moves to the words of a graphics descriptor set's stages.
+    void SeekSet(u32 set, bool split_sets) noexcept {
+        if (set == current_set) {
+            return;
+        }
+        current_set = set;
+        const u32 texture_base{GraphicsTextureScalingBase(set, split_sets)};
+        texture_ptr = words.data() + texture_base / 32;
+        texture_end = words.data() + GraphicsTextureScalingBase(set + 1, split_sets) / 32;
+        texture_bit = 1u << (texture_base % 32);
+        u32* const images{words.data() + Shader::Backend::SPIRV::NUM_TEXTURE_SCALING_WORDS};
+        const u32 image_base{GraphicsImageScalingBase(set, split_sets)};
+        image_ptr = images + image_base / 32;
+        image_end = images + GraphicsImageScalingBase(set + 1, split_sets) / 32;
+        image_bit = 1u << (image_base % 32);
     }
 
     const std::array<u32, NUM_TEXTURE_AND_IMAGE_SCALING_WORDS>& Data() const noexcept {
@@ -339,9 +406,13 @@ public:
 private:
     std::array<u32, NUM_TEXTURE_AND_IMAGE_SCALING_WORDS> words{};
     u32* texture_ptr{words.data()};
+    u32* texture_end{words.data() + Shader::Backend::SPIRV::NUM_TEXTURE_SCALING_WORDS};
     u32* image_ptr{words.data() + Shader::Backend::SPIRV::NUM_TEXTURE_SCALING_WORDS};
+    u32* image_end{words.data() + Shader::Backend::SPIRV::NUM_TEXTURE_AND_IMAGE_SCALING_WORDS};
     u32 texture_bit{1u};
     u32 image_bit{1u};
+    /// None yet: the first SeekSet installs its set's bounds, and compute keeps the whole words.
+    u32 current_set{~0u};
 };
 
 class RenderAreaPushConstant {
