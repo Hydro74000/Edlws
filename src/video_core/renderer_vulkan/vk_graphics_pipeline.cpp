@@ -12,6 +12,7 @@
 #include <iostream>
 #include <optional>
 #include <span>
+#include <utility>
 
 #include <boost/container/small_vector.hpp>
 #include <boost/container/static_vector.hpp>
@@ -432,20 +433,34 @@ GraphicsPipeline::GraphicsPipeline(
     configure_func = ConfigureFunc(*spv_modules, stage_infos);
     build_task = std::move(func);
     if (worker_thread) {
-        worker_thread->QueueWork([this] { RunBuild(); });
+        worker_thread->QueueWork([this, claimed = build_claimed] {
+            // Already claimed: the pipeline may since have been built and evicted.
+            if (!claimed->exchange(true)) {
+                RunClaimedBuild();
+            }
+        });
     } else {
         RunBuild();
     }
 }
 
+GraphicsPipeline::~GraphicsPipeline() {
+    // The build publishes is_built, after which the cache may evict the pipeline, before it
+    // releases build_mutex.
+    std::scoped_lock lock{build_mutex};
+}
+
 void GraphicsPipeline::RunBuild() {
     // A draw or dispatch that needs the pipeline builds it on the scheduler thread instead of
     // waiting for the worker queue, which can hold hundreds of builds, to reach it.
-    if (build_claimed.exchange(true)) {
-        return;
+    if (!build_claimed->exchange(true)) {
+        RunClaimedBuild();
     }
-    build_task();
-    build_task = nullptr;
+}
+
+void GraphicsPipeline::RunClaimedBuild() {
+    // The pipeline must not be touched once the build has published is_built.
+    std::exchange(build_task, nullptr)();
 }
 
 void GraphicsPipeline::AddTransition(GraphicsPipeline* transition) {
