@@ -1195,8 +1195,12 @@ vk::Pipeline GraphicsPipeline::MakePipeline(VkRenderPass render_pass,
         .flags = 0,
         .depthClampEnable =
         static_cast<VkBool32>(dynamic.depth_clamp_disabled == 0 ? VK_TRUE : VK_FALSE),
-        .rasterizerDiscardEnable =
-        static_cast<VkBool32>(dynamic.rasterize_enable == 0 ? VK_TRUE : VK_FALSE),
+        // With EDS2 the key leaves rasterize_enable at 0 and the state is dynamic: declaring
+        // discard would forbid the fragment set left out of a pre-rasterization library's layout
+        // (VUID 06683).
+        .rasterizerDiscardEnable = static_cast<VkBool32>(
+            dynamic.rasterize_enable == 0 && !key.state.extended_dynamic_state_2 ? VK_TRUE
+                                                                                : VK_FALSE),
         .polygonMode =
         MaxwellToVK::PolygonMode(FixedPipelineState::UnpackPolygonMode(key.state.polygon_mode)),
         .cullMode = static_cast<VkCullModeFlags>(
@@ -1543,9 +1547,12 @@ bool GraphicsPipeline::UsesLibraries() const {
         device.IsKhrPipelineExecutablePropertiesEnabled()) {
         return false;
     }
+    // A pre-rasterization library that discards must hold every set (VUID 06683).
+    const bool static_discard{!key.state.extended_dynamic_state_2 &&
+                              key.state.dynamic_state.rasterize_enable == 0};
     const GraphicsShaderModules& modules{*spv_modules};
     return modules[0] && modules[4] && !modules[1] && !modules[2] && !modules[3] &&
-           !IsMeshPipeline() && key.state.xfb_enabled == 0;
+           !IsMeshPipeline() && key.state.xfb_enabled == 0 && !static_discard;
 }
 
 vk::Pipeline GraphicsPipeline::MakeFromLibraries(VkRenderPass render_pass) {
