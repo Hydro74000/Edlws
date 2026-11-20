@@ -306,6 +306,9 @@ private:
     std::atomic<size_t> last_cache_size{};
     std::atomic_bool flush_in_flight{};
 
+    /// Fragment shader libraries, built while the pipeline's own thread builds the
+    /// pre-rasterization library. Destroyed after the workers whose builds wait on it.
+    Common::ThreadWorker library_workers;
     Common::ThreadWorker workers;
     Common::ThreadWorker serialization_thread;
 

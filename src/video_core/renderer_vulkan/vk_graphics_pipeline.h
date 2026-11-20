@@ -89,6 +89,7 @@ public:
         const Device& device, DescriptorPool& descriptor_pool,
         GuestDescriptorQueue& guest_descriptor_queue,
         DescriptorBufferRing& descriptor_buffer_ring, Common::ThreadWorker* worker_thread,
+        Common::ThreadWorker* library_worker,
         PipelineStatistics* pipeline_statistics, RenderPassCache& render_pass_cache,
         const GraphicsPipelineCacheKey& key,
         std::shared_ptr<const GraphicsShaderModules> modules,
@@ -184,7 +185,15 @@ private:
     bool ConfigureDraw(const RescalingPushConstant& rescaling,
                        const RenderAreaPushConstant& render_are);
 
-    void MakePipeline(VkRenderPass render_pass);
+    /// The whole pipeline, or with a library subset, a library of that subset only.
+    vk::Pipeline MakePipeline(VkRenderPass render_pass,
+                              VkGraphicsPipelineLibraryFlagsEXT library = 0);
+    /// Whether this pipeline is built from fast-linked libraries (vertex and fragment stages
+    /// only, where the device allows it).
+    bool UsesLibraries() const;
+    /// Vertex input, pre-rasterization, fragment shader and fragment output libraries, linked;
+    /// the whole pipeline if a library cannot be built.
+    vk::Pipeline MakeFromLibraries(VkRenderPass render_pass);
 
     void Validate();
 
@@ -225,6 +234,10 @@ private:
     DescriptorAllocator descriptor_allocator;
     vk::PipelineLayout pipeline_layout;
     vk::DescriptorUpdateTemplate descriptor_update_template;
+    static constexpr size_t NUM_LIBRARIES = 4;
+    Common::ThreadWorker* library_worker{};
+    /// The libraries a pipeline from libraries was linked from, destroyed after it.
+    std::array<vk::Pipeline, NUM_LIBRARIES> libraries;
     vk::Pipeline pipeline;
 
     DescriptorBufferLayout descriptor_buffer_layout;

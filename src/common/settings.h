@@ -730,6 +730,9 @@ struct Values {
     Setting<bool> renderer_debug{linkage, false, "debug", Category::RendererDebug};
     Setting<bool> renderer_shader_feedback{linkage, false, "shader_feedback",
                                            Category::RendererDebug};
+    // Off keeps every graphics pipeline monolithic, to compare with the library path.
+    Setting<bool> use_graphics_pipeline_library{linkage, true, "use_graphics_pipeline_library",
+                                                Category::RendererDebug};
     Setting<bool> enable_nsight_aftermath{linkage, false, "nsight_aftermath",
                                           Category::RendererDebug};
     Setting<bool> disable_shader_loop_safety_checks{
