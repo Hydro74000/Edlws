@@ -68,6 +68,24 @@ constexpr u32 NUM_STORAGE_BUFFERS = 32;
 constexpr u32 NUM_TEXTURE_BUFFERS = 32;
 constexpr u32 NUM_STAGES = 5;
 
+/// Size of a read-only native compute storage binding: its bound (the mapping, up to 8 MiB), or the
+/// size word after its pointer when that is larger and within the mapping. Mario Kart World's
+/// lighting passes read past 8 MiB from their pointers, inside that word: capped at 8 MiB those
+/// reads came back zero and lit land and characters too dark. Only a larger word grows the
+/// binding, since the word after a native pointer can be another parameter (a texture handle bound
+/// Fortune's Weave's DLSS input to 266 bytes), and binding the whole mapping would span heaps of up
+/// to 1 GiB. The binding stays within the storage range every Vulkan device has (128 MiB) once its
+/// start is aligned down and its end rounded up to a page.
+[[nodiscard]] constexpr u32 NativeComputeStorageSize(u32 mapping_size, u64 size_word) noexcept {
+    constexpr u32 MaxGrownSize = static_cast<u32>(128_MiB - 64_KiB);
+    const u32 bound = (std::min)(mapping_size, static_cast<u32>(8_MiB));
+    const u32 size = static_cast<u32>(size_word);
+    if (static_cast<u32>(size_word >> 32) != 0 || size <= bound || size > mapping_size) {
+        return bound;
+    }
+    return (std::min)(size, MaxGrownSize);
+}
+
 static_assert(NUM_GRAPHICS_UNIFORM_BUFFERS <= 32, "fast bitmask must fit u32");
 
 using UniformBufferSizes = std::array<std::array<u32, NUM_GRAPHICS_UNIFORM_BUFFERS>, NUM_STAGES>;
@@ -666,7 +684,8 @@ private:
 
     [[nodiscard]] Binding StorageBufferBinding(GPUVAddr ssbo_addr, u32 cbuf_index, bool is_written,
                                                bool native_pointer = false,
-                                               bool table_pointer = false) const;
+                                               bool table_pointer = false,
+                                               bool compute = false) const;
 
     /// A storage binding of the same range as the slot's previous one keeps the buffer found for
     /// it: DeleteBuffer clears the ids it frees in every channel's bindings.
@@ -694,7 +713,7 @@ private:
     /// the page tables only.
     [[nodiscard]] Binding ResolveStorageBinding(GPUVAddr gpu_addr, u64 next_qword, u32 cbuf_index,
                                                 bool is_written, bool mapped_size,
-                                                bool table_pointer) const;
+                                                bool table_pointer, bool size_word_grows) const;
 
     /// GetMemoryLayoutSize: the size from gpu_addr to the end of its run in the kind map.
     [[nodiscard]] size_t KindRunFrom(GPUVAddr gpu_addr) const;
