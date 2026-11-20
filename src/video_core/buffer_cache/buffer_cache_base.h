@@ -666,7 +666,8 @@ private:
 
     [[nodiscard]] Binding StorageBufferBinding(GPUVAddr ssbo_addr, u32 cbuf_index, bool is_written,
                                                bool native_pointer = false,
-                                               bool table_pointer = false) const;
+                                               bool table_pointer = false,
+                                               bool compute = false) const;
 
     /// A storage binding of the same range as the slot's previous one keeps the buffer found for
     /// it: DeleteBuffer clears the ids it frees in every channel's bindings.
@@ -694,7 +695,7 @@ private:
     /// the page tables only.
     [[nodiscard]] Binding ResolveStorageBinding(GPUVAddr gpu_addr, u64 next_qword, u32 cbuf_index,
                                                 bool is_written, bool mapped_size,
-                                                bool table_pointer) const;
+                                                bool table_pointer, bool size_word_grows) const;
 
     /// GetMemoryLayoutSize: the size from gpu_addr to the end of its run in the kind map.
     [[nodiscard]] size_t KindRunFrom(GPUVAddr gpu_addr) const;
