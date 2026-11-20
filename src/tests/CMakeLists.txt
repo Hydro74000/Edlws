@@ -59,6 +59,7 @@ add_executable(tests
     video_core/native_macro_fifo.cpp
     video_core/native_qmd.cpp
     video_core/framebuffer_limits.cpp
+    video_core/native_storage_size.cpp
     video_core/rescaling_push_constant.cpp
     video_core/nx2_semaphore_ledger.cpp
     video_core/nx2_semaphore_mirror.cpp

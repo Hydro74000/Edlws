@@ -2761,8 +2761,14 @@ Binding BufferCache<P>::StorageBufferBinding(GPUVAddr ssbo_addr, u32 cbuf_index,
     // A read-only native compute binding can grow past its bound through the word after the
     // pointer (ResolveStorageBinding).
     const bool size_word_grows = mapped_size && native_pointer && !table_pointer && compute;
+    // The word is optional: one starting a page that isn't mapped reads as zero, without the
+    // unmapped read error.
+    const GPUVAddr word_addr = ssbo_addr + 8;
     const u64 next_qword =
-        mapped_size && !size_word_grows ? 0 : gpu_memory->Read<u64>(ssbo_addr + 8);
+        (mapped_size && !size_word_grows) ||
+                (Common::IsAligned(word_addr, 4_KiB) && !gpu_memory->GpuToCpuAddress(word_addr))
+            ? 0
+            : gpu_memory->Read<u64>(word_addr);
     // Draws bind the same few pointers again and again, and the rest of the answer depends on the
     // page tables only: keep it until they change (the serial is read before them).
     const u64 serial = gpu_memory->MapSerial();
@@ -2813,22 +2819,13 @@ Binding BufferCache<P>::ResolveStorageBinding(GPUVAddr gpu_addr, u64 next_qword,
         if (table_pointer && mapped_size) {
             return (std::min)(memory_layout_size, static_cast<u32>(64_MiB));
         }
+        if (size_word_grows) {
+            return NativeComputeStorageSize(memory_layout_size, next_qword);
+        }
         // The NVN sizing would bind such a buffer up to whatever parameter follows the pointer
         // (a texture handle bound Fortune's Weave's DLSS input features to 266 bytes).
         if (mapped_size) {
-            const u32 bound = (std::min)(memory_layout_size, static_cast<u32>(8_MiB));
-            // Mario Kart World's lighting passes read past 8 MiB from their native compute
-            // pointers, within the size word after them: capped at 8 MiB those reads came back
-            // zero and lit land and characters too dark. Only a larger size word grows the
-            // binding, so a smaller parameter after the pointer keeps the bound, and binding the
-            // whole mapping would span heaps of up to 1 GiB. 128 MiB is the storage range every
-            // Vulkan device has.
-            const u32 size_word = static_cast<u32>(next_qword);
-            if (size_word_grows && static_cast<u32>(next_qword >> 32) == 0 &&
-                size_word > bound && size_word <= memory_layout_size) {
-                return (std::min)(size_word, static_cast<u32>(128_MiB));
-            }
-            return bound;
+            return (std::min)(memory_layout_size, static_cast<u32>(8_MiB));
         }
         const u32 packed_size = static_cast<u32>(next_qword);
         const bool next_qword_is_size = static_cast<u32>(next_qword >> 32) == 0 &&
