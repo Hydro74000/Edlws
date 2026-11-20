@@ -76,7 +76,8 @@ VkShaderStageFlagBits StageFlag(const Shader::Info& info, VkShaderStageFlagBits 
 using GraphicsLayoutBuilders =
     static_vector<DescriptorLayoutBuilder, NUM_GRAPHICS_DESCRIPTOR_SETS>;
 
-GraphicsLayoutBuilders MakeBuilders(const Device& device, std::span<const Shader::Info> infos) {
+GraphicsLayoutBuilders MakeBuilders(const Device& device, std::span<const Shader::Info> infos,
+                                    bool split_sets) {
     GraphicsLayoutBuilders builders;
     for (size_t set = 0; set < NUM_GRAPHICS_DESCRIPTOR_SETS; ++set) {
         builders.emplace_back(device);
@@ -89,8 +90,8 @@ GraphicsLayoutBuilders MakeBuilders(const Device& device, std::span<const Shader
             VK_SHADER_STAGE_GEOMETRY_BIT,
             VK_SHADER_STAGE_FRAGMENT_BIT,
         };
-        builders[GraphicsDescriptorSet(index)].Add(infos[index],
-                                                   StageFlag(infos[index], stages.at(index)));
+        builders[GraphicsDescriptorSet(index, split_sets)].Add(
+            infos[index], StageFlag(infos[index], stages.at(index)));
     }
     return builders;
 }
@@ -371,7 +372,8 @@ GraphicsPipeline::GraphicsPipeline(
                });
     });
 
-    GraphicsLayoutBuilders builders{MakeBuilders(device, stage_infos)};
+    split_sets = SplitsGraphicsDescriptorSets(device);
+    GraphicsLayoutBuilders builders{MakeBuilders(device, stage_infos, split_sets)};
     for (size_t set = 0; set < builders.size(); ++set) {
         if (!builders[set].Empty()) {
             num_descriptor_sets = static_cast<u32>(set + 1);
@@ -410,7 +412,7 @@ GraphicsPipeline::GraphicsPipeline(
     std::array<size_t, NUM_GRAPHICS_DESCRIPTOR_SETS> num_stages{};
     u32 entry{};
     for (size_t stage = 0; stage < NUM_STAGES; ++stage) {
-        const u32 set{GraphicsDescriptorSet(stage)};
+        const u32 set{GraphicsDescriptorSet(stage, split_sets)};
         ASSERT(num_stages[set] == 0 || first_stage[set] + num_stages[set] == stage);
         if (num_stages[set] == 0) {
             first_stage[set] = stage;
@@ -443,8 +445,9 @@ GraphicsPipeline::GraphicsPipeline(
             std::array<VkDescriptorSetLayout, NUM_GRAPHICS_DESCRIPTOR_SETS> pre_rasterization_sets{};
             std::array<VkDescriptorSetLayout, NUM_GRAPHICS_DESCRIPTOR_SETS> fragment_sets{};
             for (u32 set = 0; set < num_descriptor_sets; ++set) {
-                auto& sets{set == GraphicsDescriptorSet(NUM_STAGES - 1) ? fragment_sets
-                                                                        : pre_rasterization_sets};
+                auto& sets{set == GraphicsDescriptorSet(NUM_STAGES - 1, split_sets)
+                               ? fragment_sets
+                               : pre_rasterization_sets};
                 sets[set] = set_layouts[set];
             }
             const auto make = [&](const auto& sets) {
@@ -863,7 +866,7 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
         }
         {
             Profile::Scope scope{Profile::Zone::PushDescriptors};
-            rescaling.SeekSet(GraphicsDescriptorSet(stage));
+            rescaling.SeekSet(GraphicsDescriptorSet(stage, split_sets), split_sets);
             PushImageDescriptors(texture_cache, guest_descriptor_queue, stage_infos[stage],
                                  rescaling, samplers_it, views_it);
         }

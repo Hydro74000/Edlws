@@ -144,24 +144,32 @@ inline void WriteDescriptorBuffer(const Device& device, const DescriptorBufferLa
            Shader::NumDescriptors(info.image_descriptors);
 }
 
-/// Descriptor sets a graphics pipeline binds: the pre-rasterization stages, then the fragment stage.
+/// Most descriptor sets a graphics pipeline binds: the pre-rasterization stages, then the fragment
+/// stage.
 inline constexpr size_t NUM_GRAPHICS_DESCRIPTOR_SETS = 2;
+
+/// Whether the fragment stage has a set of its own. Only pipeline libraries need it, each holding
+/// its own stage's set; elsewhere every stage stays in set 0, which keeps its descriptor transport
+/// (push descriptors or descriptor buffer).
+[[nodiscard]] inline bool SplitsGraphicsDescriptorSets(const Device& device) {
+    return device.IsExtGraphicsPipelineLibraryEnabled();
+}
 
 /// The descriptor set of a graphics stage's resources, numbered from binding 0 in each set, so a
 /// stage's descriptors don't depend on the other set's stages. Stages of one set are consecutive,
 /// so each set's descriptors are one range of the draw's descriptor payload.
-[[nodiscard]] constexpr u32 GraphicsDescriptorSet(size_t stage_index) noexcept {
-    return stage_index == 4 ? 1 : 0;
+[[nodiscard]] constexpr u32 GraphicsDescriptorSet(size_t stage_index, bool split_sets) noexcept {
+    return split_sets && stage_index == 4 ? 1 : 0;
 }
 
 /// First rescaling bit of a set's textures and images: each set has its own share of the words.
-[[nodiscard]] constexpr u32 GraphicsTextureScalingBase(u32 set) noexcept {
+[[nodiscard]] constexpr u32 GraphicsTextureScalingBase(u32 set, bool split_sets) noexcept {
     return set * Shader::Backend::SPIRV::NUM_TEXTURE_SCALING_WORDS * 32 /
-           NUM_GRAPHICS_DESCRIPTOR_SETS;
+           (split_sets ? NUM_GRAPHICS_DESCRIPTOR_SETS : size_t{1});
 }
-[[nodiscard]] constexpr u32 GraphicsImageScalingBase(u32 set) noexcept {
+[[nodiscard]] constexpr u32 GraphicsImageScalingBase(u32 set, bool split_sets) noexcept {
     return set * Shader::Backend::SPIRV::NUM_IMAGE_SCALING_WORDS * 32 /
-           NUM_GRAPHICS_DESCRIPTOR_SETS;
+           (split_sets ? NUM_GRAPHICS_DESCRIPTOR_SETS : size_t{1});
 }
 
 class DescriptorLayoutBuilder {
@@ -375,19 +383,19 @@ public:
     }
 
     /// Moves to the words of a graphics descriptor set's stages.
-    void SeekSet(u32 set) noexcept {
+    void SeekSet(u32 set, bool split_sets) noexcept {
         if (set == current_set) {
             return;
         }
         current_set = set;
-        const u32 texture_base{GraphicsTextureScalingBase(set)};
+        const u32 texture_base{GraphicsTextureScalingBase(set, split_sets)};
         texture_ptr = words.data() + texture_base / 32;
-        texture_end = words.data() + GraphicsTextureScalingBase(set + 1) / 32;
+        texture_end = words.data() + GraphicsTextureScalingBase(set + 1, split_sets) / 32;
         texture_bit = 1u << (texture_base % 32);
         u32* const images{words.data() + Shader::Backend::SPIRV::NUM_TEXTURE_SCALING_WORDS};
-        const u32 image_base{GraphicsImageScalingBase(set)};
+        const u32 image_base{GraphicsImageScalingBase(set, split_sets)};
         image_ptr = images + image_base / 32;
-        image_end = images + GraphicsImageScalingBase(set + 1) / 32;
+        image_end = images + GraphicsImageScalingBase(set + 1, split_sets) / 32;
         image_bit = 1u << (image_base % 32);
     }
 

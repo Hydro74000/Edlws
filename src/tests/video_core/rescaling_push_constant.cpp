@@ -22,14 +22,14 @@ bool ImageBit(const RescalingPushConstant& rescaling, u32 bit) {
 TEST_CASE("Pre-rasterization textures past their set's bits leave the fragment set's alone",
           "[video_core][rescaling]") {
     RescalingPushConstant rescaling;
-    rescaling.SeekSet(0);
+    rescaling.SeekSet(0, true);
     for (u32 index = 0; index < 129; ++index) {
         rescaling.PushTexture(true);
     }
     REQUIRE(TextureBit(rescaling, 0));
     REQUIRE(TextureBit(rescaling, 127));
     REQUIRE_FALSE(TextureBit(rescaling, 128));
-    rescaling.SeekSet(1);
+    rescaling.SeekSet(1, true);
     rescaling.PushTexture(false);
     rescaling.PushTexture(true);
     REQUIRE_FALSE(TextureBit(rescaling, 128));
@@ -38,19 +38,33 @@ TEST_CASE("Pre-rasterization textures past their set's bits leave the fragment s
 
 TEST_CASE("Images past their set's bits are dropped", "[video_core][rescaling]") {
     RescalingPushConstant rescaling;
-    rescaling.SeekSet(0);
+    rescaling.SeekSet(0, true);
     for (u32 index = 0; index < 65; ++index) {
         rescaling.PushImage(true);
     }
     REQUIRE(ImageBit(rescaling, 63));
     REQUIRE_FALSE(ImageBit(rescaling, 64));
-    rescaling.SeekSet(1);
+    rescaling.SeekSet(1, true);
     rescaling.PushImage(false);
     for (u32 index = 1; index < 65; ++index) {
         rescaling.PushImage(true);
     }
     REQUIRE_FALSE(ImageBit(rescaling, 64));
     REQUIRE(ImageBit(rescaling, 127));
+}
+
+TEST_CASE("Without split sets, set 0 owns every bit", "[video_core][rescaling]") {
+    RescalingPushConstant rescaling;
+    rescaling.SeekSet(0, false);
+    for (u32 index = 0; index < NUM_TEXTURE_SCALING_WORDS * 32 + 1; ++index) {
+        rescaling.PushTexture(true);
+    }
+    for (u32 index = 0; index < 65; ++index) {
+        rescaling.PushImage(true);
+    }
+    REQUIRE(TextureBit(rescaling, 128));
+    REQUIRE(TextureBit(rescaling, NUM_TEXTURE_SCALING_WORDS * 32 - 1));
+    REQUIRE(ImageBit(rescaling, 64));
 }
 
 TEST_CASE("Compute textures use every texture bit and no image bit", "[video_core][rescaling]") {

@@ -1585,13 +1585,14 @@ std::shared_ptr<ReusableShaders> PipelineCache::BuildGraphicsShaders(
     auto modules{std::make_shared<GraphicsShaderModules>()};
 
     const Shader::IR::Program* previous_stage{};
-    const auto set_bindings{[](u32 set) {
+    const bool split_sets{SplitsGraphicsDescriptorSets(device)};
+    const auto set_bindings{[split_sets](u32 set) {
         return Shader::Backend::Bindings{
             .descriptor_set = set,
-            .texture_scaling_index = GraphicsTextureScalingBase(set),
-            .image_scaling_index = GraphicsImageScalingBase(set),
-            .texture_scaling_end = GraphicsTextureScalingBase(set + 1),
-            .image_scaling_end = GraphicsImageScalingBase(set + 1),
+            .texture_scaling_index = GraphicsTextureScalingBase(set, split_sets),
+            .image_scaling_index = GraphicsImageScalingBase(set, split_sets),
+            .texture_scaling_end = GraphicsTextureScalingBase(set + 1, split_sets),
+            .image_scaling_end = GraphicsImageScalingBase(set + 1, split_sets),
         };
     }};
     Shader::Backend::Bindings binding{set_bindings(0)};
@@ -1610,7 +1611,8 @@ std::shared_ptr<ReusableShaders> PipelineCache::BuildGraphicsShaders(
 
         const auto runtime_info{MakeRuntimeInfo(programs, key, program, previous_stage)};
         ConvertLegacyToGeneric(program, runtime_info);
-        if (const u32 set{GraphicsDescriptorSet(stage_index)}; set != binding.descriptor_set) {
+        if (const u32 set{GraphicsDescriptorSet(stage_index, split_sets)};
+            set != binding.descriptor_set) {
             binding = set_bindings(set);
         }
         std::vector<u32> code;

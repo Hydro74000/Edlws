@@ -240,6 +240,8 @@ private:
     std::array<DescriptorSetState, NUM_GRAPHICS_DESCRIPTOR_SETS> descriptor_sets;
     /// Sets in the pipeline layout: up to the last one with resources.
     u32 num_descriptor_sets{};
+    /// See SplitsGraphicsDescriptorSets.
+    bool split_sets{};
     vk::PipelineLayout pipeline_layout;
     /// For a pipeline built from libraries: each shader library has a layout with only its stage's
     /// set, and the pipeline is linked, and its descriptors bound, with their union.
