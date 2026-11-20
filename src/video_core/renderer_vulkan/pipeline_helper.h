@@ -403,7 +403,8 @@ private:
     u32* image_end{words.data() + Shader::Backend::SPIRV::NUM_TEXTURE_AND_IMAGE_SCALING_WORDS};
     u32 texture_bit{1u};
     u32 image_bit{1u};
-    u32 current_set{};
+    /// None yet: the first SeekSet installs its set's bounds, and compute keeps the whole words.
+    u32 current_set{~0u};
 };
 
 class RenderAreaPushConstant {

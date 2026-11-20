@@ -414,11 +414,15 @@ Id IsScaled(EmitContext& ctx, const IR::Value& index, Id member_index, u32 base_
         bit = ctx.OpBitwiseAnd(ctx.U32[1], word, bit_index_mask);
     } else {
         Id index_value{ctx.Def(index)};
+        if (may_overflow) {
+            // Before adding the base, which a large index would wrap.
+            const u32 capacity{end_index > base_index ? end_index - base_index : 0};
+            in_range = ctx.OpULessThan(ctx.U1, index_value, ctx.Const(capacity));
+        }
         if (base_index != 0) {
             index_value = ctx.OpIAdd(ctx.U32[1], index_value, ctx.Const(base_index));
         }
         if (may_overflow) {
-            in_range = ctx.OpULessThan(ctx.U1, index_value, ctx.Const(end_index));
             index_value = ctx.OpSelect(ctx.U32[1], in_range, index_value, ctx.u32_zero_value);
         }
         const Id word_index{ctx.OpShiftRightLogical(ctx.U32[1], index_value, ctx.Const(5u))};
