@@ -405,25 +405,6 @@ GraphicsPipeline::GraphicsPipeline(
     }
     pipeline_layout = builders[0].CreatePipelineLayout(
         std::span<const VkDescriptorSetLayout>(set_layouts.data(), num_descriptor_sets));
-    if (UsesLibraries()) {
-        // A set is in the layout of its stage's library only, so a library compiles the same
-        // whatever the other stage's resources are. Every set is in one of the two layouts.
-        std::array<VkDescriptorSetLayout, NUM_GRAPHICS_DESCRIPTOR_SETS> pre_rasterization_sets{};
-        std::array<VkDescriptorSetLayout, NUM_GRAPHICS_DESCRIPTOR_SETS> fragment_sets{};
-        for (u32 set = 0; set < num_descriptor_sets; ++set) {
-            auto& sets{set == GraphicsDescriptorSet(NUM_STAGES - 1) ? fragment_sets
-                                                                    : pre_rasterization_sets};
-            sets[set] = set_layouts[set];
-        }
-        const auto make = [&](const auto& sets) {
-            return builders[0].CreatePipelineLayout(
-                std::span<const VkDescriptorSetLayout>(sets.data(), num_descriptor_sets),
-                VK_PIPELINE_LAYOUT_CREATE_INDEPENDENT_SETS_BIT_EXT);
-        };
-        independent_layout = make(set_layouts);
-        library_layouts[0] = make(pre_rasterization_sets);
-        library_layouts[1] = make(fragment_sets);
-    }
 
     std::array<size_t, NUM_GRAPHICS_DESCRIPTOR_SETS> first_stage{};
     std::array<size_t, NUM_GRAPHICS_DESCRIPTOR_SETS> num_stages{};
@@ -445,17 +426,46 @@ GraphicsPipeline::GraphicsPipeline(
             DescriptorSetState& state{descriptor_sets[set]};
             state.update_template = builders[set].CreateTemplate(
                 *state.layout, *pipeline_layout, uses_push_descriptor, set);
-            if (uses_push_descriptor && independent_layout) {
-                // A push template takes the layout it is pushed with.
-                independent_push_template = builders[set].CreateTemplate(
-                    *state.layout, *independent_layout, uses_push_descriptor, set);
-            }
             if (!uses_push_descriptor && !builders[set].Empty()) {
                 state.allocator = descriptor_pool.Allocator(
                     device, scheduler, *state.layout,
                     std::span<const Shader::Info>(stage_infos).subspan(first_stage[set],
                                                                        num_stages[set]));
             }
+        }
+    }
+
+    if (UsesLibraries()) {
+        // Without these objects the pipeline is built whole.
+        try {
+            // A set is in the layout of its stage's library only, so a library compiles the same
+            // whatever the other stage's resources are. Every set is in one of the two layouts.
+            std::array<VkDescriptorSetLayout, NUM_GRAPHICS_DESCRIPTOR_SETS> pre_rasterization_sets{};
+            std::array<VkDescriptorSetLayout, NUM_GRAPHICS_DESCRIPTOR_SETS> fragment_sets{};
+            for (u32 set = 0; set < num_descriptor_sets; ++set) {
+                auto& sets{set == GraphicsDescriptorSet(NUM_STAGES - 1) ? fragment_sets
+                                                                        : pre_rasterization_sets};
+                sets[set] = set_layouts[set];
+            }
+            const auto make = [&](const auto& sets) {
+                return builders[0].CreatePipelineLayout(
+                    std::span<const VkDescriptorSetLayout>(sets.data(), num_descriptor_sets),
+                    VK_PIPELINE_LAYOUT_CREATE_INDEPENDENT_SETS_BIT_EXT);
+            };
+            independent_layout = make(set_layouts);
+            library_layouts[0] = make(pre_rasterization_sets);
+            library_layouts[1] = make(fragment_sets);
+            if (uses_push_descriptor && !uses_descriptor_buffer) {
+                // A push template takes the layout it is pushed with.
+                independent_push_template = builders[0].CreateTemplate(
+                    *descriptor_sets[0].layout, *independent_layout, true, 0);
+            }
+        } catch (const vk::Exception& exception) {
+            LOG_WARNING(Render_Vulkan, "Layouts for libraries of pipeline {:016X} failed ({})",
+                        key.Hash(), exception.what());
+            independent_layout = {};
+            library_layouts = {};
+            independent_push_template = {};
         }
     }
 
@@ -474,7 +484,8 @@ GraphicsPipeline::GraphicsPipeline(
         try {
             const PipelineStats::ScopedTimer stats_timer{PipelineStats::Kind::Graphics,
                                                          PipelineStats::Stage::Driver};
-            pipeline = UsesLibraries() ? MakeFromLibraries(render_pass) : MakePipeline(render_pass);
+            pipeline = independent_layout ? MakeFromLibraries(render_pass)
+                                          : MakePipeline(render_pass);
             if (libraries[1]) {
                 bound_layout = *independent_layout;
                 bound_push_template = *independent_push_template;
