@@ -93,6 +93,7 @@ public:
         const GraphicsPipelineCacheKey& key,
         std::shared_ptr<const GraphicsShaderModules> modules,
         const std::array<const Shader::Info*, NUM_STAGES>& infos);
+    ~GraphicsPipeline();
 
     bool HasDynamicVertexInput() const noexcept { return key.state.dynamic_vertex_input; }
     bool SupportsAlphaToCoverage() const noexcept {
@@ -237,9 +238,12 @@ private:
     std::atomic_bool is_built{false};
     /// Builds the pipeline once, on whichever thread gets here first.
     void RunBuild();
+    void RunClaimedBuild();
 
     std::function<void()> build_task;
-    std::atomic_bool build_claimed{false};
+    /// Shared with the task queued on the worker, which can run after a draw has built the
+    /// pipeline and the cache has evicted it.
+    std::shared_ptr<std::atomic_bool> build_claimed{std::make_shared<std::atomic_bool>(false)};
     bool uses_push_descriptor{false};
     bool uses_descriptor_buffer{false};
 };
